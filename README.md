@@ -92,10 +92,6 @@ TTPoE's initial deployment was for the Tesla Dojo v1 project, where the protocol
 
 If you came here to be impressed by something complex and clever, you won't be. The protocol is designed on basic fundamentals -- simple transport and to the point. Ethernet transport in essence is only intended to move data from point A to B and should be limited by physics -- not software execution time. Centralized congestion management of extremely large scale machines (just like the internet) is a fool's errand -- each endpoint should be resiliant and self-managing. 
 
-TCP conquered the internet in a simple RFC. TTPoE attempts to do the same for AI and ExaScale. 
-
-True brilliance is in simplicity.
-
 Eric Quinnell -- Sept 13, 2024
 
 # TTPoE Transport Header
@@ -138,7 +134,7 @@ The following sections have details regarding making and executing the reference
 
 GIT repo info and unit tests
 
-The source code git repo is at https://github.com/teslamotors/ttpoe. The code for modttpoe is under the 'modttpoe' subdir. The compilation is controlled via a top level Makefile in order to allow related modules to share symbols. Compilation is done as follows:
+The source code git repo is at https://github.com/teslamotors/ttpoe. The code for modttpoe is under the 'modttpoe' subdir. The compilation is controlled via a top level Makefile in order to allow related modules to share symbols. Compilation is done as follows (gcc, linux-5.15-0-48-generic, ubuntu22):
 
     $ pwd
     GIT_HEAD
