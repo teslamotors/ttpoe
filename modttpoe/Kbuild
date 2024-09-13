@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Copyright (c) 2023 Tesla Inc. All rights reserved.
+#
+# Makefile for the Tesla Transport Protocol (TTP) Kernel Module
+#
+# Authors:    Diwakar Tundlam <dntundlam@tesla.com>
+#
+# This software is licensed under the terms of the GNU General Public License version 2 as published
+# by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+# Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
+#
+
+obj-m := modttpoe.o
+ccflags-y := -O2 -DTTP_PREFIX=$(TTP_PREFIX_STR) -Werror -I$(PWD)/include
+modttpoe-y := ttpoe.o print.o fsm.o proc.o tags.o param.o noc.o

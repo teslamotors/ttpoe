@@ -1,0 +1,4 @@
+config BR2_PACKAGE_MODTTP
+        bool "modttp"
+        help
+          modttp implement ttp kernel modules - modttpoe and modttpip
