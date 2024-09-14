@@ -61,7 +61,7 @@
 static struct ttp_mac_table {
     u8 mac[ETH_ALEN];
     u8 zon;
-    u8 age;
+    s8 age;
 } ttp_mac_addrs[TTP_MAC_TABLE_SIZE];
 
 u8  ttp_mactbl_ct;
@@ -229,17 +229,17 @@ static int ttp_param_gwips_set (const char *val, const struct kernel_param *kp)
 
 static int ttp_param_gwips_get (char *buf, const struct kernel_param *kp)
 {
-    int zn, sc = 0, bs = 700;
+    int snn, zn, sc = 0, bs = 700;
     struct ttp_intf_cfg *zcfg;
     char ipaddr_str[64], *via;
 
     BUG_ON (!ttp_num_gwips);
-    int n = snprintf (buf + sc, bs - sc, BLUE "%2s %29s  %-17s  %-8s %s\n" CLEAR,
+    snn = snprintf (buf + sc, bs - sc, BLUE "%2s %29s  %-17s  %-8s %s\n" CLEAR,
                     "zn", "ttp-layer3-gateway-ip", "next-hop-mac-addr", "device", "via");
-    if (n < 0 || n >= bs - sc) {
+    if (snn < 0 || snn >= bs - sc) {
         return sc;
     }
-    sc += n;
+    sc += snn;
     for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
         zcfg = &ttp_zones[zn];
         if (!zcfg->ver) {
@@ -253,16 +253,16 @@ static int ttp_param_gwips_get (char *buf, const struct kernel_param *kp)
             snprintf (ipaddr_str, 64, "%26pI6c", &zcfg->ip6);
             via = zcfg->gwy ? "rt6" : "dir";
         }
-        n = snprintf (buf + sc, bs - sc,
+        snn = snprintf (buf + sc, bs - sc,
                         "%s%d%c %26s/%-2d  %*pM  %-8s %s\n" CLEAR,
                         zn == ttp_myzn ? GREEN : NOCOLOR,
                         zn, zn == ttp_myzn ? '*' : ' ', ipaddr_str, zcfg->pfl,
                         ETH_ALEN, zcfg->mac, zcfg->dev->name,
                         zn == ttp_myzn ? "*zn" : via);
-        if (n < 0 || n >= bs - sc) {
+        if (snn < 0 || snn >= bs - sc) {
             return sc;
         }
-        sc += n;
+        sc += snn;
     }
     return sc;
 }
@@ -279,26 +279,26 @@ MODULE_PARM_DESC (gwips, "    set list of ttp gateway ip-addreses per zone (1,2,
 
 static int ttp_param_intfs_get (char *buf, const struct kernel_param *kp)
 {
-    int iv, sc = 0, bs = 1000;
+    int iv, snn, sc = 0, bs = 1000;
     struct ttp_intf_cfg *dev;
     char ipaddr_str[64], zc, st;
 
-    int n = snprintf (buf + sc, bs - sc, BLUE "%2s %2s  %-8s %29s  %17s\n" CLEAR,
+    snn = snprintf (buf + sc, bs - sc, BLUE "%2s %2s  %-8s %29s  %17s\n" CLEAR,
                     "zn", "if", "device", "interface-ip-address", "device-mac-addr");
-    if (n < 0 || n >= bs - sc) {
+    if (snn < 0 || snn >= bs - sc) {
         return sc;
     }
-    sc += n;
+    sc += snn;
     for (iv = 0; iv < ttp_num_intfs; iv++) {
         dev = &ttp_intfs[iv];
         zc = st = ' ';
         if (!dev->dev) {
-            n = snprintf (buf + sc, bs - sc, GRAY "%c%c %2d  %-8s\n" CLEAR,
+            snn = snprintf (buf + sc, bs - sc, GRAY "%c%c %2d  %-8s\n" CLEAR,
                             zc, st, iv + 1, "none");
-            if (n < 0 || n >= bs - sc) {
+            if (snn < 0 || snn >= bs - sc) {
                 return sc;
             }
-            sc += n;
+            sc += snn;
             continue;
         }
         if (dev->zon == ttp_myzn) {
@@ -311,14 +311,14 @@ static int ttp_param_intfs_get (char *buf, const struct kernel_param *kp)
         else if (dev->ver == 6) {
             snprintf (ipaddr_str, 64, "%26pI6c", &dev->ip6);
         }
-        n = snprintf (buf + sc, bs - sc, "%s%c%c %2d  %-8s %26s/%-2d  %*pM\n" CLEAR,
+        snn = snprintf (buf + sc, bs - sc, "%s%c%c %2d  %-8s %26s/%-2d  %*pM\n" CLEAR,
                         dev->zon == ttp_myzn ? GREEN : NOCOLOR,
                         zc, st, iv, dev->dev->name,
                         ipaddr_str, dev->pfl, ETH_ALEN, dev->dev->dev_addr);
-        if (n < 0 || n >= bs - sc) {
+        if (snn < 0 || snn >= bs - sc) {
             return sc;
         }
-        sc += n;
+        sc += snn;
     }
     return sc;
 }
@@ -334,32 +334,32 @@ MODULE_PARM_DESC (intfs, "    get all interfaces on the ttp-gateway");
 
 static int ttp_param_edevs_get (char *buf, const struct kernel_param *kp)
 {
-    int iv, sc = 0, bs = 700;
+    int iv, snn, sc = 0, bs = 700;
     struct ttp_intf_cfg *dev;
 
-    int n = snprintf (buf + sc, bs - sc, BLUE "%2s  %-8s %17s\n" CLEAR,
+    snn = snprintf (buf + sc, bs - sc, BLUE "%2s  %-8s %17s\n" CLEAR,
                     "if", "device", "device-mac-addr");
-    if (n < 0 || n >= bs - sc) {
+    if (snn < 0 || snn >= bs - sc) {
         return sc;
     }
-    sc += n;
+    sc += snn;
     for (iv = 0; iv < ttp_num_edevs; iv++) {
         dev = &ttp_edevs[iv];
         if (!dev->dev) {
-            n = snprintf (buf + sc, bs - sc, "%2d %-8s\n", iv, "none");
-            if (n < 0 || n >= bs - sc) {
+            snn = snprintf (buf + sc, bs - sc, "%2d %-8s\n", iv, "none");
+            if (snn < 0 || snn >= bs - sc) {
                 return sc;
             }
-            sc += n;
+            sc += snn;
             continue;
         }
-        n = snprintf (buf + sc, bs - sc, "%s%-2d  %-8s %*pM\n" CLEAR,
+        snn = snprintf (buf + sc, bs - sc, "%s%-2d  %-8s %*pM\n" CLEAR,
                         !strncmp (dev->dev->name, ttp_dev, 8) ? RED : NOCOLOR,
                         iv, dev->dev->name, ETH_ALEN, dev->dev->dev_addr);
-        if (n < 0 || n >= bs - sc) {
+        if (snn < 0 || snn >= bs - sc) {
             return sc;
         }
-        sc += n;
+        sc += snn;
     }
     return sc;
 }
@@ -399,7 +399,7 @@ static struct ttp_mac_table *ttp_param_mactbl_find (char *mac)
 }
 
 
-static int ttp_param_mactbl_add (int zn, char *mac, int *ix)
+static int ttp_param_mactbl_add (int zn, char *mac, int *ix, bool do_age)
 {
     int iv;
 
@@ -411,7 +411,7 @@ static int ttp_param_mactbl_add (int zn, char *mac, int *ix)
     }
     for (iv = 0; iv < TTP_MAC_TABLE_SIZE; iv++) {
         if (ether_addr_equal (ttp_mac_addrs[iv].mac, mac)) {
-            ttp_mac_addrs[iv].age = 0;
+            ttp_mac_addrs[iv].age = do_age ? 0 : -1;
             ttp_mac_addrs[iv].zon = zn;
             if (ix) {
                 *ix = iv;
@@ -420,6 +420,7 @@ static int ttp_param_mactbl_add (int zn, char *mac, int *ix)
         }
         if (is_zero_ether_addr (ttp_mac_addrs[iv].mac)) {
             ether_addr_copy (ttp_mac_addrs[iv].mac, mac);
+            ttp_mac_addrs[iv].age = do_age ? 0 : -1;
             ttp_mac_addrs[iv].zon = zn;
             ttp_mactbl_ct++;
             if (ix) {
@@ -474,7 +475,7 @@ static int ttp_param_mactbl_set (const char *val, const struct kernel_param *kp)
     TTP_DBG ("%s: zn:%d mac:%*phC\n", __FUNCTION__, zn, ETH_ALEN, mac);
 
     iv = 0;
-    if ((rc = ttp_param_mactbl_add (zn, mac, &iv))) {
+    if ((rc = ttp_param_mactbl_add (zn, mac, &iv, false))) { /* no aging */
         if (rc != EEXIST) {
             TTP_LOG ("`-> Error: mac-table full (rv:%d)\n", rc);
             return -ENOSPC;
@@ -488,36 +489,35 @@ static int ttp_param_mactbl_set (const char *val, const struct kernel_param *kp)
 
 static int ttp_param_mactbl_get (char *buf, const struct kernel_param *kp)
 {
-    int sc = 0, bs = 1000, iv;
-    int n = 0;
+    int snn = 0, sc = 0, bs = 1000, iv;
     
     if (!ttp_mactbl_ct) {
-        n = snprintf (buf + sc, bs - sc, "<empty>\n");
-        if (n < 0 || n >= bs - sc) {
+        snn = snprintf (buf + sc, bs - sc, "<empty>\n");
+        if (snn < 0 || snn >= bs - sc) {
             return sc;
         }
-        sc += n;
+        sc += snn;
         return sc;
     }
 
-    n = snprintf (buf + sc, bs - sc, "zn  hash  --- mac-addrs ---  age\n");
-    if (n < 0 || n >= bs - sc) {
+    snn = snprintf (buf + sc, bs - sc, "zn  hash  --- mac-addrs ---  age\n");
+    if (snn < 0 || snn >= bs - sc) {
         return sc;
     }
-    sc += n;
+    sc += snn;
 
     for (iv = 0; iv < ttp_mactbl_ct; iv++) {
         if (!is_zero_ether_addr (ttp_mac_addrs[iv].mac)) {
-            n = snprintf (buf + sc, bs - sc, "%2d  %4d  %*pM  %3d%s\n",
+            snn = snprintf (buf + sc, bs - sc, "%2d  %4d  %*pM  %3d  %s\n",
                             ttp_mac_addrs[iv].zon,
                             ttp_tag_index_hash_calc (ttp_mac_addrs[iv].mac),
                             ETH_ALEN, ttp_mac_addrs[iv].mac,
                             ttp_mac_addrs[iv].age,
-                            ttp_mac_addrs[iv].zon == ttp_myzn ? "  local" : "");
-            if (n < 0 || n >= bs - sc) {
+                            ttp_mac_addrs[iv].zon == ttp_myzn ? "  local" : "remote");
+            if (snn < 0 || snn >= bs - sc) {
                 return sc;
             }
-            sc += n;
+            sc += snn;
         }
         if (bs < sc) {
             return -EMSGSIZE;
@@ -863,7 +863,7 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     }
 
     if (ether_addr_equal (neth.h_dest, ttpip_etype_tsla.dev->dev_addr)) {
-        if ((rc = ttp_param_mactbl_add (ttp_myzn, neth.h_source, &iv))) {
+        if ((rc = ttp_param_mactbl_add (ttp_myzn, neth.h_source, &iv, true))) {
             if (rc != EEXIST) {
                 TTP_LOG ("`-> Error: mac-table full (rv:%d)\n", rc);
                 goto end;
@@ -1193,14 +1193,20 @@ static void ttp_gw_mac_adv_timer_cb (struct timer_list *tl)
     skb_reset_mac_header (skb);
     dev_queue_xmit (skb);
 
+    /* do mac table aging */
     for (iv = 0; iv < ttp_mactbl_ct; iv++) {
-        if (!is_zero_ether_addr (ttp_mac_addrs[iv].mac)) {
-            if (ttp_mac_addrs[iv].age >= TTP_MAC_AGEOUT_MAX) {
-                memset (&ttp_mac_addrs[iv], 0, sizeof (struct ttp_mac_table));
-                continue;
-            }
-            ttp_mac_addrs[iv].age++;
+        if (ttp_mac_addrs[iv].age == -1) {
+            continue;
         }
+        if (is_zero_ether_addr (ttp_mac_addrs[iv].mac)) {
+            continue;
+        }
+        if (ttp_mac_addrs[iv].age >= TTP_MAC_AGEOUT_MAX) {
+            /* aged: clear out the entry */
+            memset (&ttp_mac_addrs[iv], 0, sizeof (struct ttp_mac_table));
+            continue;
+        }
+        ttp_mac_addrs[iv].age++;
     }
 
     ttp_gw_mac_adv_timer_head.expires = jiffies + msecs_to_jiffies (1000);
