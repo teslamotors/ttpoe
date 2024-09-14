@@ -283,14 +283,22 @@ static int ttp_param_intfs_get (char *buf, const struct kernel_param *kp)
     struct ttp_intf_cfg *dev;
     char ipaddr_str[64], zc, st;
 
-    sc += snprintf (buf + sc, bs - sc, BLUE "%2s %2s  %-8s %29s  %17s\n" CLEAR,
+    int n = snprintf (buf + sc, bs - sc, BLUE "%2s %2s  %-8s %29s  %17s\n" CLEAR,
                     "zn", "if", "device", "interface-ip-address", "device-mac-addr");
+    if (n < 0 || n >= bs - sc) {
+        return sc;
+    }
+    sc += n;
     for (iv = 0; iv < ttp_num_intfs; iv++) {
         dev = &ttp_intfs[iv];
         zc = st = ' ';
         if (!dev->dev) {
-            sc += snprintf (buf + sc, bs - sc, GRAY "%c%c %2d  %-8s\n" CLEAR,
+            n = snprintf (buf + sc, bs - sc, GRAY "%c%c %2d  %-8s\n" CLEAR,
                             zc, st, iv + 1, "none");
+            if (n < 0 || n >= bs - sc) {
+                return sc;
+            }
+            sc += n;
             continue;
         }
         if (dev->zon == ttp_myzn) {
@@ -303,10 +311,14 @@ static int ttp_param_intfs_get (char *buf, const struct kernel_param *kp)
         else if (dev->ver == 6) {
             snprintf (ipaddr_str, 64, "%26pI6c", &dev->ip6);
         }
-        sc += snprintf (buf + sc, bs - sc, "%s%c%c %2d  %-8s %26s/%-2d  %*pM\n" CLEAR,
+        n = snprintf (buf + sc, bs - sc, "%s%c%c %2d  %-8s %26s/%-2d  %*pM\n" CLEAR,
                         dev->zon == ttp_myzn ? GREEN : NOCOLOR,
                         zc, st, iv, dev->dev->name,
                         ipaddr_str, dev->pfl, ETH_ALEN, dev->dev->dev_addr);
+        if (n < 0 || n >= bs - sc) {
+            return sc;
+        }
+        sc += n;
     }
     return sc;
 }
@@ -325,17 +337,29 @@ static int ttp_param_edevs_get (char *buf, const struct kernel_param *kp)
     int iv, sc = 0, bs = 700;
     struct ttp_intf_cfg *dev;
 
-    sc += snprintf (buf + sc, bs - sc, BLUE "%2s  %-8s %17s\n" CLEAR,
+    int n = snprintf (buf + sc, bs - sc, BLUE "%2s  %-8s %17s\n" CLEAR,
                     "if", "device", "device-mac-addr");
+    if (n < 0 || n >= bs - sc) {
+        return sc;
+    }
+    sc += n;
     for (iv = 0; iv < ttp_num_edevs; iv++) {
         dev = &ttp_edevs[iv];
         if (!dev->dev) {
-            sc += snprintf (buf + sc, bs - sc, "%2d %-8s\n", iv, "none");
+            n = snprintf (buf + sc, bs - sc, "%2d %-8s\n", iv, "none");
+            if (n < 0 || n >= bs - sc) {
+                return sc;
+            }
+            sc += n;
             continue;
         }
-        sc += snprintf (buf + sc, bs - sc, "%s%-2d  %-8s %*pM\n" CLEAR,
+        n = snprintf (buf + sc, bs - sc, "%s%-2d  %-8s %*pM\n" CLEAR,
                         !strncmp (dev->dev->name, ttp_dev, 8) ? RED : NOCOLOR,
                         iv, dev->dev->name, ETH_ALEN, dev->dev->dev_addr);
+        if (n < 0 || n >= bs - sc) {
+            return sc;
+        }
+        sc += n;
     }
     return sc;
 }
@@ -465,22 +489,35 @@ static int ttp_param_mactbl_set (const char *val, const struct kernel_param *kp)
 static int ttp_param_mactbl_get (char *buf, const struct kernel_param *kp)
 {
     int sc = 0, bs = 1000, iv;
-
+    int n = 0;
+    
     if (!ttp_mactbl_ct) {
-        sc += snprintf (buf + sc, bs - sc, "<empty>\n");
+        n = snprintf (buf + sc, bs - sc, "<empty>\n");
+        if (n < 0 || n >= bs - sc) {
+            return sc;
+        }
+        sc += n;
         return sc;
     }
 
-    sc += snprintf (buf + sc, bs - sc, "zn  hash  --- mac-addrs ---  age\n");
+    n = snprintf (buf + sc, bs - sc, "zn  hash  --- mac-addrs ---  age\n");
+    if (n < 0 || n >= bs - sc) {
+        return sc;
+    }
+    sc += n;
 
     for (iv = 0; iv < ttp_mactbl_ct; iv++) {
         if (!is_zero_ether_addr (ttp_mac_addrs[iv].mac)) {
-            sc += snprintf (buf + sc, bs - sc, "%2d  %4d  %*pM  %3d%s\n",
+            n = snprintf (buf + sc, bs - sc, "%2d  %4d  %*pM  %3d%s\n",
                             ttp_mac_addrs[iv].zon,
                             ttp_tag_index_hash_calc (ttp_mac_addrs[iv].mac),
                             ETH_ALEN, ttp_mac_addrs[iv].mac,
                             ttp_mac_addrs[iv].age,
                             ttp_mac_addrs[iv].zon == ttp_myzn ? "  local" : "");
+            if (n < 0 || n >= bs - sc) {
+                return sc;
+            }
+            sc += n;
         }
         if (bs < sc) {
             return -EMSGSIZE;
