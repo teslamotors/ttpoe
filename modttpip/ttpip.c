@@ -232,9 +232,11 @@ static int ttp_param_gwips_get (char *buf, const struct kernel_param *kp)
     int zn, sc = 0, bs = 700;
     struct ttp_intf_cfg *zcfg;
     char ipaddr_str[64], *via;
+    int n = -1;
 
     BUG_ON (!ttp_num_gwips);
-    int n = snprintf (buf + sc, bs - sc, BLUE "%2s %29s  %-17s  %-8s %s\n" CLEAR,
+    
+    n = snprintf (buf + sc, bs - sc, BLUE "%2s %29s  %-17s  %-8s %s\n" CLEAR,
                     "zn", "ttp-layer3-gateway-ip", "next-hop-mac-addr", "device", "via");
     if (n < 0 || n >= bs - sc) {
         return sc;
