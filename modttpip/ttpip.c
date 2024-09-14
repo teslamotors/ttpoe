@@ -234,8 +234,12 @@ static int ttp_param_gwips_get (char *buf, const struct kernel_param *kp)
     char ipaddr_str[64], *via;
 
     BUG_ON (!ttp_num_gwips);
-    sc += snprintf (buf + sc, bs - sc, BLUE "%2s %29s  %-17s  %-8s %s\n" CLEAR,
+    int n = snprintf (buf + sc, bs - sc, BLUE "%2s %29s  %-17s  %-8s %s\n" CLEAR,
                     "zn", "ttp-layer3-gateway-ip", "next-hop-mac-addr", "device", "via");
+    if (n < 0 || n >= bs - sc) {
+        return sc;
+    }
+    sc += n;
     for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
         zcfg = &ttp_zones[zn];
         if (!zcfg->ver) {
@@ -249,12 +253,16 @@ static int ttp_param_gwips_get (char *buf, const struct kernel_param *kp)
             snprintf (ipaddr_str, 64, "%26pI6c", &zcfg->ip6);
             via = zcfg->gwy ? "rt6" : "dir";
         }
-        sc += snprintf (buf + sc, bs - sc,
+        n = snprintf (buf + sc, bs - sc,
                         "%s%d%c %26s/%-2d  %*pM  %-8s %s\n" CLEAR,
                         zn == ttp_myzn ? GREEN : NOCOLOR,
                         zn, zn == ttp_myzn ? '*' : ' ', ipaddr_str, zcfg->pfl,
                         ETH_ALEN, zcfg->mac, zcfg->dev->name,
                         zn == ttp_myzn ? "*zn" : via);
+        if (n < 0 || n >= bs - sc) {
+            return sc;
+        }
+        sc += n;
     }
     return sc;
 }
