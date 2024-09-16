@@ -1,0 +1,20 @@
+# Ignore EMACS swap files
+*~
+
+# Ignore VIM swap files
+*.swp
+
+# Ignore module build files
+*.cmd
+Module.symvers
+modules.order
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.o
+a.out
+ver.h
+ID
+TAGS
+.vscode

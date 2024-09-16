@@ -490,7 +490,7 @@ static int ttp_param_mactbl_set (const char *val, const struct kernel_param *kp)
 static int ttp_param_mactbl_get (char *buf, const struct kernel_param *kp)
 {
     int snn = 0, sc = 0, bs = 1000, iv;
-    
+
     if (!ttp_mactbl_ct) {
         snn = snprintf (buf + sc, bs - sc, "<empty>\n");
         if (snn < 0 || snn >= bs - sc) {
