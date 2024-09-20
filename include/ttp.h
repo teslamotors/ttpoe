@@ -227,6 +227,12 @@ static inline u8 ttp_tag_index_hash_calc (const u8 *mac)
 
 
 #ifdef __KERNEL__
+/* mapping of ttp-src-node / ttp-dst-node address in the 24b tesla shim header
+ *  23 22 21 20 19 18 17 16 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ * |    mac address [3]    |    mac address [4]    |    mac address [5]    |
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ */
 static inline void ttp_mac_from_shim (u8 *mac, const u8 *shim)
 {
     *((u32 *)mac) = ntohl (Tesla_Mac_Oui << 8);
@@ -236,28 +242,34 @@ static inline void ttp_mac_from_shim (u8 *mac, const u8 *shim)
 
 static inline void ttp_print_eth_hdr (struct ethhdr *eth)
 {
-    TTP_DBG ("dmac: %*pM smac:%*pM etype:%04x\n",
-             ETH_ALEN, eth->h_dest, ETH_ALEN, eth->h_source, ntohs (eth->h_proto));
+    if (ttp_verbose) {
+        TTP_DBG ("dmac: %*pM smac:%*pM etype:%04x\n", ETH_ALEN, eth->h_dest,
+                 ETH_ALEN, eth->h_source, ntohs (eth->h_proto));
+    }
 }
 
 
 static inline void ttp_print_tsla_type_hdr (struct ttp_tsla_type_hdr *tth)
 {
-    if (ttp_mem_is_zero ((u8 *)tth->pad, ((int)sizeof (tth->pad)) / 4)) {
-        TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d res:0x%02x len:%d pad(%d)%s\n",
-                 tth->styp, tth->vers, tth->tthl, tth->l3gw, tth->resv, ntohs (tth->tot_len),
-                 (int)sizeof (tth->pad), (int)sizeof (tth->pad) ? ":00's" : "");
-    } else {
-        TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d res:0x%02x len:%d\n",
-                 tth->styp, tth->vers, tth->tthl, tth->l3gw, tth->resv, ntohs (tth->tot_len));
-        TTP_DBG ("      pad(%d): %*phN\n", (int)sizeof (tth->pad), (int)sizeof (tth->pad), tth->pad);
+    if (ttp_verbose) {
+        if (ttp_mem_is_zero ((u8 *)tth->pad, ((int)sizeof (tth->pad)) / 4)) {
+            TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d res:0x%02x len:%d pad(%d)%s\n",
+                     tth->styp, tth->vers, tth->tthl, tth->l3gw, tth->resv, ntohs (tth->tot_len),
+                     (int)sizeof (tth->pad), (int)sizeof (tth->pad) ? ":00's" : "");
+        } else {
+            TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d res:0x%02x len:%d\n",
+                     tth->styp, tth->vers, tth->tthl, tth->l3gw, tth->resv, ntohs (tth->tot_len));
+            TTP_DBG ("      pad(%d): %*phN\n", (int)sizeof (tth->pad), (int)sizeof (tth->pad), tth->pad);
+        }
     }
 }
 
 
 static inline void ttp_print_shim_hdr (struct ttp_tsla_shim_hdr *tsh)
 {
-    TTP_DBG (" tsh: src-node:%*phC dst-node:%*phC length:%d\n",
-             ETH_ALEN/2, tsh->src_node, ETH_ALEN/2, tsh->dst_node, ntohs (tsh->length));
+    if (ttp_verbose) {
+        TTP_DBG (" tsh: src-node:%*phC dst-node:%*phC length:%d\n", ETH_ALEN/2,
+                 tsh->src_node, ETH_ALEN/2, tsh->dst_node, ntohs (tsh->length));
+    }
 }
 #endif

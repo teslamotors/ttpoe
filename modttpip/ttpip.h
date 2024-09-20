@@ -37,6 +37,46 @@
 #define TTP_MAX_NUM_EDEVS       20
 #define TTP_MAX_NUM_INTFS       20
 
+#define TTP_GW_MAC_ADV_TMR 1000 /* msec */
+#define TTP_MAC_TABLE_SIZE  256
+#define TTP_U8_MAX_MAX_VAL  255
+
+/* +----- Aging algorithm: R=remote N=new -----+
+ * | -1    0   1   2  . . .  | OLD         MAX |
+ * +----+----+---+---+...+---+----+---+...+----+
+ * |  R |  N |<--- Alive --->|<-- Old --->|Dead|
+ * +----+----+---+---+...+---+----+---+...+----+
+ */
+#define TTP_MAC_AGEOUT_MAX   30 /* Nx MAC_ADV_TMR ex: 30 sec @1s tick */
+#if    (TTP_MAC_AGEOUT_MAX >= TTP_U8_MAX_MAX_VAL)
+#error "TTP_MAC_AGEOUT_MAX overflows maximum value for 8 bits"
+#endif
+#define TTP_MAC_AGEOUT_OLD   (TTP_MAC_AGEOUT_MAX * 80 / 100) /* 80% of MAX */
+
+enum ttp_mac_opcodes {
+    TTP_LOCAL,
+    TTP_GATEWAY,
+    TTP_REMOTE_ADD,
+    TTP_REMOTE_DEL,
+    TTP_INVALID,
+};
+
+struct ttp_mactable {
+    struct rb_node rbn;
+    union { /* flags */
+        struct {
+            u8     val : 1;
+            u8     rem : 1;
+            u8     gwf : 1;
+            u8     _x_ : 5;
+        };
+        u8         flg;
+    };
+    u8             zon;
+    s8             age;
+    u8             mac[ETH_ALEN];
+};
+
 struct ttp_intf_cfg {
     u8                  zon;
     u8                  ver;
@@ -53,47 +93,5 @@ extern struct ttp_intf_cfg ttp_zones[TTP_MAX_NUM_ZONES];
 extern struct ttp_intf_cfg ttp_edevs[TTP_MAX_NUM_EDEVS];
 extern struct ttp_intf_cfg ttp_intfs[TTP_MAX_NUM_INTFS];
 
-
-/* mapping of ttp-src-node / ttp-dst-node address in the 24b tesla shim header
- *  23 22 21 20 19 18 17 16 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
- * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
- * |    mac address [3]    |    mac address [4]    |    mac address [5]    |
- * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
- *
-static inline void ttp_setup_shim_hdr (struct ttp_tsla_shim_hdr *tsh, const struct ethhdr *eth)
-{
-    memcpy (tsh->src_node, eth->h_source + 3, ETH_ALEN/2);
-    memcpy (tsh->dst_node, eth->h_dest   + 3, ETH_ALEN/2);
-}
-**/
-
-
-static const u8 ttp_debug_hv2zone_tbl[TTP_MAX_NUM_NODES] = {
-    [0x00] = 0,
-    [0x01] = 1,  [0x02] = 1,  [0x03] = 1,  [0x10] = 1,  [0xd3] = 1, // d1:11:8a
-    [0x04] = 2,  [0x05] = 2,  [0x06] = 2,  [0x11] = 2,  [0x8d] = 2, // d1:10:54
-    [0x07] = 3,  [0x08] = 3,  [0x09] = 3,               [0x4e] = 3, // d1:09:0f
-    [0x0a] = 4,  [0x0b] = 4,  [0x0c] = 4,
-    [0x0d] = 5,  [0x0e] = 5,  [0x0f] = 5,
-    [0x21] = 6,  [0x22] = 6,  [0x23] = 6,  [0x24] = 6,
-};
-
-static inline u8 ttp_hash_from_shim (const u8 *shim)
-{
-    u8 mac[ETH_ALEN];
-
-    ttp_mac_from_shim (mac, shim);
-    return ttp_tag_index_hash_calc (mac);
-}
-
-
-static inline int ttp_zone_from_shim (const u8 *shim)
-{
-    u8 nid;
-
-    nid = ttp_hash_from_shim (shim);
-    if (nid >= TTP_MAX_NUM_NODES)
-        return -EINVAL;
-
-    return ttp_debug_hv2zone_tbl[nid];
-}
+extern struct mutex   ttp_mactable_mutx;
+extern struct rb_root ttp_mactbl_rbroot;

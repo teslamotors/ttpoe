@@ -236,7 +236,6 @@ def setUpModule():
                 lct = lct - 1
                 continue
 
-            print (f" GW MAC addr: {pfo}")
             rv = os.system (f"echo 1 |"
                             f" sudo tee {modpath}/use_gw 1>/dev/null")
             if (rv != 0):
