@@ -117,7 +117,7 @@ u8 *ttp_skb_aloc (struct sk_buff **skbp, const int nl)
 
     frame_len = ETH_HLEN + TTP_TTH_HDR_LEN + nl;
 
-    if (!(skb = alloc_skb (frame_len + TTP_IP_HEADROOM, GFP_KERNEL))) {
+    if (!(skb = alloc_skb (frame_len + TTP_IP_HEADROOM, GFP_ATOMIC))) {
         return NULL;
     }
 

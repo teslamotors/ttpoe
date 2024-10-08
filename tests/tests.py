@@ -64,17 +64,17 @@ def setUpModule():
     if "-v" in sys.argv[1:] or "--verbose" in sys.argv[1:]:
         verbose = 1
 
-    if verbose:
-        print (f"v---------------------------------------v")
+    selfHost = selfHostname()
 
     if verbose:
+        print (f"v---------------------------------------v")
         print (f" Start tests: {datetime.now()}")
     if (options.self_dev):
         selfDev = options.self_dev
         if verbose:
             print (f"     SelfDev: {selfDev} (override)")
     else:
-        selfDev = getDev (selfHostname())
+        selfDev = getDev (selfHost)
         if verbose == 2:
             print (f"     selfDev: {selfDev} (default)")
 
@@ -137,7 +137,7 @@ def setUpModule():
     else:
         print (f"--no-remote: skipping ssh remote '{peerHost}'")
 
-    if (peerHost == selfHostname()):
+    if (peerHost == selfHost):
         print (f"Error: Self --target='{options.target}'")
         sys.exit (-1)
 
@@ -145,7 +145,9 @@ def setUpModule():
         po = subprocess.run (['file', '/dev/noc_debug'],
                              stdout=subprocess.PIPE).stdout.decode().strip()
         if ("character special (446/0)" not in po):
-            print (f"Error: 'self' /dev/noc_debug not 'char' dev (446/0) (UNEXPECTED)")
+            os.system (f"ls -al /dev/noc_debug")
+            print (f"Error: 'self' /dev/noc_debug not 'char' dev (446/0)\n"
+                   "HINT: '/dev/noc_debug' may be a plain text file - remove it.")
             sys.exit (-1)
 
     if peerHost:
@@ -155,10 +157,12 @@ def setUpModule():
             po = subprocess.run (['ssh', peerHost, 'file', '/dev/noc_debug'],
                                  stdout=subprocess.PIPE).stdout.decode().strip()
             if ("character special (446/0)" not in po):
-                print (f"Error: 'peer' /dev/noc_debug not 'char' dev (446/0) (UNEXPECTED)")
+                os.system (f"ssh {peerHost} 'ls -al /dev/noc_debug'")
+                print (f"Error: 'peer' /dev/noc_debug not 'char' dev (446/0)\n"
+                       "HINT: '/dev/noc_debug' may be a plain text file - remove it.")
                 sys.exit (-1)
 
-    selfLock = f"/mnt/mac/.locks/ttp-host-lock-{selfHostname}"
+    selfLock = f"/mnt/mac/.locks/ttp-host-lock-{selfHost}"
     try:
         os.open (selfLock, os.O_CREAT | os.O_EXCL, stat.S_IRUSR)
     except FileExistsError as e:
@@ -175,7 +179,7 @@ def setUpModule():
             sys.exit (-1)
 
     if verbose:
-        print (f"   Self Host: {selfHostname()}")
+        print (f"   Self Host: {selfHost}")
         print (f"    MAC addr: {selfMac}")
         print (f"   Peer Host: {peerHost}")
         print (f" Use Gateway: {options.use_gw}")
@@ -278,6 +282,10 @@ def setUpModule():
                 os.remove (selfLock)
                 os.remove (peerLock)
                 sys.exit (-1)
+        if (options.use_gw):
+            time.sleep (2) # to allow for gw-mac resolve on peer and remote-mac-adv
+        else:
+            time.sleep (0.5) # to allow peer module to settle down
 
     # to test setting peer target.vci in setup-module (change 0 --> 1 to enable)
     if (0):
@@ -321,8 +329,8 @@ def tearDownModule():
     if peerHost:
         os.remove (peerLock)
 
-# This "Test0_Seq_IDs" test-suite needs to be the first test to run, as it checks RX and TX seq-IDs
-# which depend on how many payloads were sent and received.
+# This "Test0_Seq_IDs" test-suite needs to be the first test to run, as it checks RX
+# and TX seq-IDs which depend on how many payloads were sent and received.
 #@unittest.skip ("<comment>")
 class Test0_Seq_IDs (unittest.TestCase):
 

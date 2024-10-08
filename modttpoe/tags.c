@@ -1002,7 +1002,7 @@ TTP_NOINLINE static void ttp_fsm_global_timer_callback (struct timer_list *tl)
 
 void ttp_gwmacadv (void)
 {
-    ttpoe_noc_debug_tx (NULL, NULL, 0, TTP_EV__AKQ__OPEN_NACK, &ttp_debug_gwmac);
+    ttpoe_noc_debug_tx (NULL, NULL, 2, TTP_EV__AKQ__OPEN_NACK, &ttp_debug_gwmac);
 }
 
 
@@ -1150,9 +1150,6 @@ void __init ttp_fsm_init (void)
             ttp_tag_reset (lt);
         }
     }
-
-    /* kick off periodic tasks */
-    ttp_gwmacadv ();
 }
 
 void __exit ttp_fsm_exit (void)

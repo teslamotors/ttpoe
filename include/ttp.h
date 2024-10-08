@@ -61,7 +61,7 @@
 extern u8  Tesla_Mac_Oui0;
 extern u8  Tesla_Mac_Oui1;
 extern u8  Tesla_Mac_Oui2;
-extern u32 Tesla_Mac_Oui;
+extern u32 Tesla_Mac_Oui; /* 3-bytes in host order: (mac[0]<<16)|(mac[1]<<8)|mac[2]) */
 
 #define TTP_MIN_FRAME_LEN ((u16)64)   /* Ethernet minimum frame len */
 #define TTP_MAX_FRAME_LEN ((u16)1536) /* Ethernet MAXimum frame len */
@@ -95,7 +95,8 @@ extern u32 Tesla_Mac_Oui;
 /* re-use the trick used in timers to get to container struct for the work context */
 #define from_work(var...) from_timer(var)
 
-#define TTP_XX2VAL(xx)       (isdigit (xx) ? (xx) - '0' : isxdigit (xx) ? toupper (xx) - 'A' + 0xA : 0)
+#define TTP_XX2VAL(xx)       (isdigit (xx) ? (xx) - '0' :               \
+                              isxdigit (xx) ? toupper (xx) - 'A' + 0xA : 0)
 #define TTP_HEX2BY(cx,cy)    ((16 * TTP_XX2VAL (cx)) + TTP_XX2VAL (cy))
 #define TTP_NAH2B(n,a,x,y)   ((16 * TTP_XX2VAL ((n) > (x) ? (a)[(x)] : 0)) + \
                               TTP_XX2VAL ((n) > (y) ? (a)[(y)] : 0))
@@ -185,16 +186,15 @@ struct ttp_tsla_shim_hdr {
 #define TTP_IP_HEADROOM    (ETH_HLEN + sizeof (struct in6_addr) + TTP_LITTLE_XTRA)
 
 
-/* len is number of u32 words; returns true if !len or mem contains zeros as 32b chunks */
+/* len is number of bytes; returns true if !len or mem contains zeros as bytes */
 static inline int ttp_mem_is_zero (const u8 *mem, int len)
 {
     while (len > 0) {
-        if (*((const u32 *)mem + (--len))) {
+        if (*(mem + (--len))) {
             return 0;
         }
     }
-
-    return 1;
+    return 1; /* is_zero? yes, all bytes zero */
 }
 
 
@@ -215,7 +215,7 @@ static inline u8 ttp_tag_reverse_bits (u8 in)
     /* Other clever methods from http://graphics.stanford.edu/~seander/bithacks.html
      *  1. u8 b = ((b * 0x0202020202ULL & 0x010884422010ULL) % 1023) & 0xff;
      *  2. u8 b = ((b * 0x80200802ULL) & 0x0884422110ULL) * 0x0101010101ULL >> 32;
-     *  3. u8 b = ((b * 0x0802LU & 0x22110LU) | (b * 0x8020LU & 0x88440LU)) * 0x10101LU >> 16;
+     *  3. u8 b = ((b * 0x0802LU&0x22110LU) | (b * 0x8020LU&0x88440LU)) * 0x10101LU >> 16;
      */
 }
 
@@ -235,41 +235,52 @@ static inline u8 ttp_tag_index_hash_calc (const u8 *mac)
  */
 static inline void ttp_mac_from_shim (u8 *mac, const u8 *shim)
 {
-    *((u32 *)mac) = ntohl (Tesla_Mac_Oui << 8);
-    memcpy (mac + 3, shim, ETH_ALEN/2);
+    if (!ttp_mem_is_zero (shim, ETH_ALEN/2)) {
+        *((u32 *)mac) = htonl (Tesla_Mac_Oui << 8);
+        memcpy (mac + 3, shim, ETH_ALEN/2);
+    }
 }
 
 
-static inline void ttp_print_eth_hdr (struct ethhdr *eth)
+static inline void ttp_print_eth_hdr (const struct ethhdr *eth)
 {
-    if (ttp_verbose) {
+    if (ttp_verbose > 0) {
         TTP_DBG ("dmac: %*pM smac:%*pM etype:%04x\n", ETH_ALEN, eth->h_dest,
                  ETH_ALEN, eth->h_source, ntohs (eth->h_proto));
     }
 }
 
 
-static inline void ttp_print_tsla_type_hdr (struct ttp_tsla_type_hdr *tth)
+static inline void ttp_print_tsla_type_hdr (const struct ttp_tsla_type_hdr *tth)
 {
-    if (ttp_verbose) {
-        if (ttp_mem_is_zero ((u8 *)tth->pad, ((int)sizeof (tth->pad)) / 4)) {
-            TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d res:0x%02x len:%d pad(%d)%s\n",
-                     tth->styp, tth->vers, tth->tthl, tth->l3gw, tth->resv, ntohs (tth->tot_len),
-                     (int)sizeof (tth->pad), (int)sizeof (tth->pad) ? ":00's" : "");
+    if (ttp_verbose > 0) {
+        if (ttp_mem_is_zero ((u8 *)tth->pad, sizeof (tth->pad))) {
+            TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
+                     "res:0x%02x len:%d pad(%d)%s\n",
+                     tth->styp, tth->vers, tth->tthl, tth->l3gw,
+                     tth->resv, ntohs (tth->tot_len),
+                     (int)sizeof (tth->pad),
+                     (int)sizeof (tth->pad) ? ":00's" : "");
         } else {
-            TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d res:0x%02x len:%d\n",
-                     tth->styp, tth->vers, tth->tthl, tth->l3gw, tth->resv, ntohs (tth->tot_len));
-            TTP_DBG ("      pad(%d): %*phN\n", (int)sizeof (tth->pad), (int)sizeof (tth->pad), tth->pad);
+            TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
+                     "res:0x%02x len:%d\n",
+                     tth->styp, tth->vers, tth->tthl, tth->l3gw,
+                     tth->resv, ntohs (tth->tot_len));
+            TTP_DBG ("      pad(%d): %*phN\n", (int)sizeof (tth->pad),
+                     (int)sizeof (tth->pad), tth->pad);
         }
     }
 }
 
 
-static inline void ttp_print_shim_hdr (struct ttp_tsla_shim_hdr *tsh)
+static inline void ttp_print_shim_hdr (const struct ttp_tsla_shim_hdr *tsh)
 {
-    if (ttp_verbose) {
-        TTP_DBG (" tsh: src-node:%*phC dst-node:%*phC length:%d\n", ETH_ALEN/2,
-                 tsh->src_node, ETH_ALEN/2, tsh->dst_node, ntohs (tsh->length));
+    if (ttp_verbose > 0) {
+        TTP_DBG (" tsh: src-node:%*phC dst-node:%*phC length:%d%s%*phC\n",
+                 ETH_ALEN/2, tsh->src_node, ETH_ALEN/2, tsh->dst_node,
+                 ntohs (tsh->length),
+                 ntohs (tsh->length) == 2 ? " ctrl:" : "",
+                 ntohs (tsh->length) == 2 ? 2 : 0, tsh + 1);
     }
 }
 #endif

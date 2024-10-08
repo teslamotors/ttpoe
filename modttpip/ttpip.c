@@ -57,17 +57,19 @@
 
 char *ttp_dev;
 int ttp_verbose = -1;
-int ttp_shutdown = 1;         /* 'DOWN' by default - enabled at init after checking */
+int ttp_shutdown = 1; /* 'DOWN' by default - enabled at init after checking */
 
-u32 Tesla_Mac_Oui = TESLA_MAC_OUI; /* CAUTION: hard-code main OUI (won't work with OUI-#2) */
+u32 Tesla_Mac_Oui = TESLA_MAC_OUI; /* CAUTION: hard-code OUI (won't work with OUI-#2) */
 
-static struct timer_list ttp_nh_mac_timer_head;
-static struct timer_list ttp_gw_mac_adv_timer_head;
+struct ttp_timer ttp_nh_mac_tmr = {.exp = TTP_NH_MAC_TRY_TMR, .max = 5};
+struct ttp_timer ttp_gw_ctl_tmr = {.exp = TTP_GW_CTL_ADV_TMR};
 
 static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
                            struct packet_type *ptype, struct net_device *odev);
 static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
                            struct packet_type *ptype, struct net_device *odev);
+static void ttp_gw_ctl_send (const char *mac, enum ttp_mac_opcodes oc);
+static void ttp_gw_ctl_recv (const char *mac, const struct ttp_tsla_shim_hdr *tsh);
 
 static struct packet_type ttpip_etype_lyr3 __read_mostly = {
     .dev  = NULL,               /* set via module-param */
@@ -82,14 +84,12 @@ static struct packet_type ttpip_etype_tsla __read_mostly = {
     .ignore_outgoing = true,
 };
 
-static u16 ttp_myzn;
-static int ttp_num_gwips, ttp_num_edevs, ttp_num_intfs;
-
+static int          ttp_myzn;
+static int          ttp_num_gwips;
 struct ttp_intf_cfg ttp_zones[TTP_MAX_NUM_ZONES];
-struct ttp_intf_cfg ttp_edevs[TTP_MAX_NUM_EDEVS];
-struct ttp_intf_cfg ttp_intfs[TTP_MAX_NUM_INTFS];
 
-struct mutex        ttp_mactable_mutx;
+struct mutex        ttp_mactbl_mutx;
+struct mutex        ttp_zoncfg_mutx;
 struct rb_root      ttp_mactbl_rbroot = RB_ROOT;
 static unsigned int ttp_mactbl_ct;
 
@@ -104,6 +104,21 @@ static unsigned int ttp_mactbl_ct;
     } while (0)
 
 
+static inline bool ttpip_is_ttp_dev (const u8 *name)
+{
+    return !strncmp (name, ttp_dev, IFNAMSIZ);
+}
+
+static void ttpip_multicast_mac_create (u8 *mac)
+{
+    u32 imac; /* holds lower 3 bytes - similar to shim */
+
+    imac = htonl (0xFFFFFF << 8); /* makes each lower 3 byte = 0xff */
+    ttp_mac_from_shim (mac, (u8 *)&imac); /* construct mac with tesla-oui */
+    mac[0] |= 0x3; /* convert to multicast link-local mac address */
+}
+
+
 static struct sk_buff *ttpip_skb_aloc (void)
 {
     struct sk_buff *skb;
@@ -111,7 +126,7 @@ static struct sk_buff *ttpip_skb_aloc (void)
 
     frame_len = ETH_HLEN + 12;
 
-    if (!(skb = alloc_skb (frame_len + TTP_IP_HEADROOM, GFP_KERNEL))) {
+    if (!(skb = alloc_skb (frame_len + TTP_IP_HEADROOM, GFP_ATOMIC))) {
         return NULL;
     }
 
@@ -127,26 +142,28 @@ static struct sk_buff *ttpip_skb_aloc (void)
 }
 
 
-static void ttpip_pretty_print_data (const u8 *caption, const int bpl, bool tx,
-                                     const u8 *devname, const u8 *buf, const int buflen)
+static void ttpip_pretty_print_data (const u8 *caption, bool tx,
+                                     const u8 *devname, const u8 *buf,
+                                     int buflen, int trmlen)
 {
-    int len = buflen;
+    int len = !trmlen ? buflen : trmlen;
 
-    if (ttp_verbose < 2) {
-        return;
+    if (ttp_verbose > 1) {
+        TTP_DBG ("%s %s dev: %s len: %d%s\n",
+                 caption, tx ? "<<- Tx" : "->> Rx", devname, buflen,
+                 (trmlen && (trmlen != buflen)) ? " (trimmed)" : "");
+        do {
+            TTP_DBG ("%s %*ph\n", caption, min (len, 16), buf);
+            buf += 16;
+            len -= 16;
+        } while (len > 0);
     }
-    TTP_DBG ("%s %s dev: %s len: %d\n", caption, tx ? "<<- Tx" : "->> Rx", devname, buflen);
-    do {
-        TTP_DBG ("%s %*ph\n", caption, min (len, 16), buf);
-        buf += 16;
-        len -= 16;
-    } while (len > 0);
 }
 
 
 static inline void ttp_print_ipv4_hdr (struct iphdr *ip)
 {
-    if (ttp_verbose) {
+    if (ttp_verbose > 0) {
         TTP_DBG ("ip4h: %*ph\n", 10, ip);
         TTP_DBG ("      %*ph\n", (int)sizeof (*ip) - 10, (10 + (u8 *)ip));
         TTP_DBG ("  ver:%d ihl:%d ttl:%d tos:%02x len:%d proto:%d%s\n",
@@ -159,7 +176,7 @@ static inline void ttp_print_ipv4_hdr (struct iphdr *ip)
 
 static inline void ttp_print_ipv6_hdr (struct ipv6hdr *ipv6)
 {
-    if (ttp_verbose) {
+    if (ttp_verbose > 0) {
         TTP_DBG ("ip6h: %*ph\n", 20, ipv6);
         TTP_DBG ("      %*ph\n", (int)sizeof (*ipv6) - 20, (20 + (u8 *)ipv6));
         TTP_DBG ("  ver:%d len:%d ttl:%d proto:%d%s\n",
@@ -170,91 +187,153 @@ static inline void ttp_print_ipv6_hdr (struct ipv6hdr *ipv6)
 }
 
 
-static inline struct ttp_intf_cfg *ttp_intf_cfg_get (int zn)
+static inline bool ttp_zone_valid (int zn)
 {
-    struct ttp_intf_cfg *zcfg;
+    bool rv;
 
-    if (zn > 0 && zn < TTP_MAX_NUM_ZONES) {
+    rv = !!((ttp_num_gwips) &&
+            (zn > 0 && zn < TTP_MAX_NUM_ZONES) &&
+            (ttp_zones[zn].ver == 4 || ttp_zones[zn].ver == 6));
+
+    return rv;
+}
+
+
+static inline bool ttp_myzone (int zn)
+{
+    bool rv;
+
+    rv = !!(ttp_num_gwips && (ttp_myzn == zn));
+    return rv;
+}
+
+
+static inline struct ttp_intf_cfg *ttp_zcfg (int zn)
+{
+    struct ttp_intf_cfg *zcfg = NULL;
+
+    if (ttp_zone_valid (zn)) {
         zcfg = &ttp_zones[zn];
-        if (zcfg->ver == 4 || zcfg->ver == 6) {
-            return zcfg;
-        }
     }
-
-    return NULL;
+    return zcfg;
 }
 
 
-static struct ttp_intf_cfg *ttp_intf_get (struct ttp_intf_cfg *zf, int ver)
+static inline struct ttp_intf_cfg *ttp_myzcfg (void)
 {
-    int iv;
-    struct ttp_intf_cfg *intf, *intf_only_ver = NULL;
-
-    for (iv = 0; iv < ttp_num_intfs; iv++) {
-        intf = &ttp_intfs[iv];
-        if (intf->ver != ver) {
-            continue;
-        }
-        if (intf->dev == zf->dev) {
-            return intf;
-        }
-        else if (!intf_only_ver) {
-            intf_only_ver = intf;
-        }
-    }
-    return intf_only_ver;
+    return ttp_zcfg (ttp_myzn);
 }
 
 
-static int ttp_gw_ipv4_get (struct in_addr *ip4)
-{
-    int zn;
-    struct ttp_intf_cfg *zcfg;
-
-    for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
-        zcfg = &ttp_zones[zn];
-        if (zcfg->ver != 4) {
-            continue;
-        }
-        if (zcfg->ip4.s_addr == ip4->s_addr) {
-            return zn;
-        }
-    }
-    return -EINVAL;
-}
-
-
-static int ttp_gw_ipv6_get (struct in6_addr *ip6)
-{
-    int zn;
-    struct ttp_intf_cfg *zcfg;
-
-    for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
-        zcfg = &ttp_zones[zn];
-        if (zcfg->ver != 6) {
-            continue;
-        }
-        if (0 == ipv6_addr_cmp (&zcfg->ip6, ip6)) {
-            return zn;
-        }
-    }
-    return -EINVAL;
-}
-
-
-static int ttp_param_dummy_set (const char *val, const struct kernel_param *kp)
+static inline int ttp_param_dummy_set (const char *val, const struct kernel_param *kp)
 {
     TTP_LOG ("%s: Error: kernel param not settable\n", __FUNCTION__);
     return -EPERM;
 }
 
 
+/* Scan ipv4 addresses */
+static void ttp_param_zones_scan_ipv4 (const struct net_device *dev)
+{
+    int zn;
+    struct ttp_intf_cfg *zcfg;
+    struct in_ifaddr *ifa4;
+
+    TTP_LOG ("  `->Scanning ipv4 addresses: on dev:%s\n", dev->name);
+
+    rcu_read_lock ();
+    for (ifa4 = rcu_dereference (dev->ip_ptr->ifa_list); ifa4;
+         ifa4 = rcu_dereference (ifa4->ifa_next)) {
+
+        TTP_LOG ("    `->ipv4:%pI4/%d%s\n", &ifa4->ifa_address, ifa4->ifa_prefixlen,
+                 ttpip_is_ttp_dev (dev->name) ? " (ttp-dev)" : "");
+
+        for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
+            if (!(zcfg = ttp_zcfg (zn))) {
+                continue;
+            }
+            if ((zcfg->ver != 4) || (zcfg->da4.s_addr != ifa4->ifa_address)) {
+                continue;
+            }
+            if (zcfg->dev) {
+                TTP_LOG ("Error: zn:%d repeated ipv4 device: (dev:%s)\n", zn, dev->name);
+                break;
+            }
+
+            zcfg->zon = ttp_myzn = zn;
+            zcfg->dev = dev;
+
+            ttpip_etype_lyr3.dev = (struct net_device *)dev;
+            ttpip_etype_lyr3.type = htons (ETH_P_IP);
+
+            zcfg->pfl = ifa4->ifa_prefixlen;
+            memcpy (zcfg->mac, zcfg->dev->dev_addr, ETH_ALEN);
+
+            TTP_LOG ("      `->Found zone: my_zn:%d dev:%s ip4:%pI4/%d\n",
+                     ttp_myzn, dev->name, &zcfg->da4, zcfg->pfl);
+            break;
+        }
+    }
+    rcu_read_unlock ();
+}
+
+
+/* Scan ipv6 addresses */
+static void ttp_param_zones_scan_ipv6 (const struct net_device *dev)
+{
+    int zn;
+    struct list_head *lhp;
+    struct ttp_intf_cfg *zcfg;
+    struct inet6_ifaddr *ifa6;
+
+    TTP_LOG ("  `->Scanning ipv6 addresses: on dev:%s\n", dev->name);
+
+    rcu_read_lock ();
+    list_for_each (lhp, &dev->ip6_ptr->addr_list) {
+        if (!(ifa6 = list_entry (lhp, struct inet6_ifaddr, if_list))) {
+            break;
+        }
+
+        TTP_LOG ("    `->ipv6:%pI6c/%d%s\n", &ifa6->addr, ifa6->prefix_len,
+                 ttpip_is_ttp_dev (dev->name) ? " (ttp-dev)" : "");
+
+        for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
+            if (!(zcfg = ttp_zcfg (zn))) {
+                continue;
+            }
+            if ((zcfg->ver != 6) || ipv6_addr_cmp (&zcfg->da6, &ifa6->addr)) {
+                continue;
+            }
+            if (zcfg->dev) {
+                TTP_LOG ("Error: zn:%d repeated ipv6 device: (dev:%s)\n", zn, dev->name);
+                break;
+            }
+
+            zcfg->zon = ttp_myzn = zn;
+            zcfg->dev = dev;
+
+            ttpip_etype_lyr3.dev = (struct net_device *)dev;
+            ttpip_etype_lyr3.type = htons (ETH_P_IPV6);
+
+            zcfg->pfl = ifa6->prefix_len;
+            memcpy (zcfg->mac, zcfg->dev->dev_addr, ETH_ALEN);
+
+            TTP_LOG ("      `->Found zone: my_zn:%d dev:%s ip6:%pI6c/%d\n",
+                     ttp_myzn, dev->name, &zcfg->da6, zcfg->pfl);
+            break;
+        }
+    }
+    rcu_read_unlock ();
+}
+
+
 static int ttp_param_gwips_set (const char *val, const struct kernel_param *kp)
 {
     int len, rv;
-    u16 zn;
+    int zn;
     char save;
     struct ttp_intf_cfg *zcfg;
+    struct net_device *dev;
 
     if (!(len = strcspn (val, "\n"))) {
         return 0;
@@ -262,42 +341,43 @@ static int ttp_param_gwips_set (const char *val, const struct kernel_param *kp)
     if (((char *)val)[len] == '\n') {
         ((char *)val)[len] = '\0'; /* eat any trailing newline in val */
     }
+    if (!mutex_trylock (&ttp_zoncfg_mutx)) {
+        TTP_LOG ("%s: Error: zon-mutex trylock failed\n", __FUNCTION__);
+        return -EBUSY;
+    }
 
+    TTP_LOG ("%s: Parsing gwips from '%s'\n", __FUNCTION__, val);
+
+    /* Force re-initialization of zones */
     ttp_num_gwips = 0;
+    memset (ttp_zones, 0, sizeof (ttp_zones));
+    TTP_LOG ("`->: Zeroed out %lu bytes: %lu ttp_zones\n", sizeof (struct ttp_intf_cfg),
+             sizeof (ttp_zones) / sizeof (struct ttp_intf_cfg));
+
     for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
-        zcfg = &ttp_zones[zn];
-        len = strcspn (val, ",");
-        if (!len) {
-            goto next;
-        }
-        save = val[len];
-        if (save == ',') {
-            ((char *)val)[len] = '\0'; /* eat any trailing newline in val */
-        }
-        if ((rv = in4_pton (val, -1, (u8 *)&zcfg->ip4, -1, NULL))) {
-            zcfg->ver = 4;
-            zcfg->zon = zn;
-        }
-        else if ((rv = in6_pton (val, -1, (u8 *)&zcfg->ip6, -1, NULL))) {
-            zcfg->ver = 6;
-            zcfg->zon = zn;
-        }
-        else {
-            goto next;
-        }
-        ttp_num_gwips++;
-        if (zcfg->ver == 4) {
-            TTP_DBG ("%s: zn:%d ip4:%pI4\n", __FUNCTION__, zn, &zcfg->ip4);
-        }
-        else if (zcfg->ver == 6) {
-            TTP_DBG ("%s: zn:%d ip6:%pI6c\n", __FUNCTION__, zn, &zcfg->ip6);
+        zcfg = &ttp_zones[zn]; /* pick array entry directly (others: use ttp_zcfg()) */
+        if ((len = strcspn (val, ","))) {
+            save = val[len];
+            if (save == ',') {
+                ((char *)val)[len] = '\0'; /* eat any trailing newline in val */
+            }
+            if ((rv = in4_pton (val, -1, (u8 *)&zcfg->da4, -1, NULL))) {
+                zcfg->ver = 4;
+                zcfg->zon = zn;
+                ttp_num_gwips++;
+                TTP_LOG ("  `->zn:%d ip4:%pI4\n", zn, &zcfg->da4);
+            }
+            else if ((rv = in6_pton (val, -1, (u8 *)&zcfg->da6, -1, NULL))) {
+                zcfg->ver = 6;
+                zcfg->zon = zn;
+                ttp_num_gwips++;
+                TTP_LOG ("  `->zn:%d ip6:%pI6c\n", zn, &zcfg->da6);
+            }
         }
 
-    next:
         val += len + 1;
         if ((save == ',') && (zn == TTP_MAX_NUM_ZONES - 1)) {
-            TTP_LOG ("%s: ignoring zones beyond max=%d\n", __FUNCTION__,
-                     TTP_MAX_NUM_ZONES);
+            TTP_LOG ("`->Ignoring zones beyond max=%d\n", TTP_MAX_NUM_ZONES - 1);
             break;
         }
         if (save != ',') {
@@ -305,10 +385,36 @@ static int ttp_param_gwips_set (const char *val, const struct kernel_param *kp)
         }
     }
     if (!ttp_num_gwips) {
+        mutex_unlock (&ttp_zoncfg_mutx);
         return -EINVAL;
     }
 
     BUG_ON (ttp_num_gwips >= TTP_MAX_NUM_ZONES);
+
+    /* Scan network devices, interfaces, and IP addresses:
+     * Caution: Only discovers devices in default network namespace (netns) */
+    read_lock (&dev_base_lock);
+    TTP_LOG ("%s: Scanning network devices:\n", __FUNCTION__);
+    for (dev = first_net_device (&init_net); dev; dev = next_net_device (dev)) {
+        if (dev->flags & IFF_LOOPBACK) {
+            continue;
+        }
+        if (!(dev->flags & IFF_UP)) {
+            continue;
+        }
+        TTP_LOG ("`->Found device: dev:%s id:%d mac:%*phC\n", dev->name, dev->ifindex,
+                 ETH_ALEN, dev->dev_addr);
+
+        ttp_param_zones_scan_ipv4 (dev);
+        ttp_param_zones_scan_ipv6 (dev);
+    }
+    read_unlock (&dev_base_lock);
+
+    /* reset nh resolution timer state and kick off */
+    ttp_nh_mac_tmr.rst = true;
+    mod_timer (&ttp_nh_mac_tmr.tmh, jiffies + msecs_to_jiffies (100));
+
+    mutex_unlock (&ttp_zoncfg_mutx);
     return 0;
 }
 
@@ -316,34 +422,42 @@ static int ttp_param_gwips_get (char *buf, const struct kernel_param *kp)
 {
     int zn, sc = 0, bs = PAGE_SIZE;
     struct ttp_intf_cfg *zcfg;
-    char ipaddr_str[64], *via;
+    char dastr[64], *via;
+
+    if (!mutex_trylock (&ttp_zoncfg_mutx)) {
+        TTP_LOG ("%s: Error: zon-mutex trylock failed\n", __FUNCTION__);
+        return -EBUSY;
+    }
 
     BUG_ON (!ttp_num_gwips);
-    TTP_SNPRINTF (BLUE "%2s %29s  %-17s  %-8s %s\n" CLEAR,
-                  "zn", "ttp-layer3-gateway-ip", "next-hop-mac-addr", "device", "via");
+    TTP_SNPRINTF (BLUE "%2s  %26s  %-17s  %-8s %7s\n" CLEAR,
+                  "zn", "ttp-layer3-gateway-ip", "next-hop-mac-addr", "device", "route");
 
     for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
-        zcfg = &ttp_zones[zn];
-        if (!zcfg->ver) {
+        if (!(zcfg = ttp_zcfg (zn))) {
             continue;
         }
         if (zcfg->ver == 4) {
-            snprintf (ipaddr_str, 64, "%26pI4", &zcfg->ip4);
-            via = zcfg->gwy ? "rt4" : "dir";
+            snprintf (dastr, 64, "%pI4", &zcfg->da4);
+            via = zcfg->gwy ? "rt-v4" : "dir-arp";
         }
         else if (zcfg->ver == 6) {
-            snprintf (ipaddr_str, 64, "%26pI6c", &zcfg->ip6);
-            via = zcfg->gwy ? "rt6" : "dir";
+            snprintf (dastr, 64, "%pI6c", &zcfg->da6);
+            via = zcfg->gwy ? "rt-v6" : "dir-nd6";
         }
         else {
             continue;
         }
-        TTP_SNPRINTF ("%s%d%c %26s/%-2d  %*pM  %-8s %s\n" CLEAR,
-                      zn == ttp_myzn ? GREEN : NOCOLOR,
-                      zn, zn == ttp_myzn ? '*' : ' ',
-                      ipaddr_str, zcfg->pfl, ETH_ALEN, zcfg->mac,
-                      zcfg->dev->name, zn == ttp_myzn ? "*zn" : via);
+        TTP_SNPRINTF ("%s%2d%c %26s  %*pM  %-8s %7s\n" CLEAR,
+                      ttp_myzone (zn) ? CYAN : !is_valid_ether_addr (zcfg->mac) ?
+                      RED : zcfg->gwy ? zcfg->ver == 4 ? GREEN : YELLOW : NOCOLOR,
+                      zn, ttp_myzone (zn) ? '*' : ' ', dastr, ETH_ALEN, zcfg->mac,
+                      zcfg->dev ? zcfg->dev->name : "(none)",
+                      ttp_myzone (zn) ? "self" : !is_valid_ether_addr (zcfg->mac) ?
+                      "unres" : via);
     }
+
+    mutex_unlock (&ttp_zoncfg_mutx);
     return sc;
 }
 
@@ -352,45 +466,54 @@ static const struct kernel_param_ops ttp_param_gwips_ops = {
     .get = ttp_param_gwips_get,
 };
 
-module_param_cb (gwips, &ttp_param_gwips_ops, &ttp_num_gwips, 0444);
+module_param_cb (gwips, &ttp_param_gwips_ops, &ttp_num_gwips, 0644);
 MODULE_PARM_DESC (gwips, "    set list of ttp gateway ip-addreses per zone (1,2,3,..):\n"
                   "                          e.g. gwips=10.0.1.1,10.0.2.2,10.0.3.3,..");
 
 
 static int ttp_param_intfs_get (char *buf, const struct kernel_param *kp)
 {
-    int iv, sc = 0, bs = PAGE_SIZE;
-    struct ttp_intf_cfg *dev;
-    char ipaddr_str[64], zc, st;
+    int sc = 0, bs = PAGE_SIZE;
+    struct net_device *dev;
+    struct list_head *lhp;
+    struct in_ifaddr *ifa4;
+    struct inet6_ifaddr *ifa6;
 
-    TTP_SNPRINTF (BLUE "%2s %2s  %-8s %29s  %17s\n" CLEAR,
-                  "zn", "if", "device", "interface-ip-address", "device-mac-addr");
+    TTP_SNPRINTF (BLUE "%2s  %-8s %29s  %17s\n" CLEAR,
+                  "if", "device", "interface-ip-address", "device-mac-addr");
 
-    for (iv = 0; iv < ttp_num_intfs; iv++) {
-        dev = &ttp_intfs[iv];
-        zc = st = ' ';
-        if (!dev->dev) {
-            TTP_SNPRINTF (GRAY "%c%c %2d  %-8s\n" CLEAR, zc, st, iv + 1, "none");
+    read_lock (&dev_base_lock);
+    for (dev = first_net_device (&init_net); dev; dev = next_net_device (dev)) {
+        if (dev->flags & IFF_LOOPBACK) {
             continue;
         }
-        if (dev->zon == ttp_myzn) {
-            zc = ttp_myzn + '0';
-            st = '*';
-        }
-        if (dev->ver == 4) {
-            snprintf (ipaddr_str, 64, "%26pI4", &dev->ip4);
-        }
-        else if (dev->ver == 6) {
-            snprintf (ipaddr_str, 64, "%26pI6c", &dev->ip6);
-        }
-        else {
+        if (!(dev->flags & IFF_UP)) {
             continue;
         }
-        TTP_SNPRINTF ("%s%c%c %2d  %-8s %26s/%-2d  %*pM\n" CLEAR,
-                      dev->zon == ttp_myzn ? GREEN : NOCOLOR,
-                      zc, st, iv, dev->dev->name, ipaddr_str, dev->pfl,
-                      ETH_ALEN, dev->dev->dev_addr);
+
+        rcu_read_lock ();
+        for (ifa4 = rcu_dereference (dev->ip_ptr->ifa_list); ifa4;
+             ifa4 = rcu_dereference (ifa4->ifa_next)) {
+            TTP_SNPRINTF ("%s%2d  %-8s %26pI4/%-2d  %*pM\n" CLEAR,
+                          ttpip_is_ttp_dev (dev->name) ? RED : GREEN,
+                          dev->ifindex, dev->name,
+                          &ifa4->ifa_address, ifa4->ifa_prefixlen,
+                          ETH_ALEN, dev->dev_addr);
+        }
+
+        list_for_each (lhp, &dev->ip6_ptr->addr_list) {
+            if (!(ifa6 = list_entry (lhp, struct inet6_ifaddr, if_list))) {
+                break;
+            }
+            TTP_SNPRINTF ("%s%2d  %-8s %26pI6c/%-2d  %*pM\n" CLEAR,
+                          ttpip_is_ttp_dev (dev->name) ? RED : NOCOLOR,
+                          dev->ifindex, dev->name,
+                          &ifa6->addr, ifa6->prefix_len,
+                          ETH_ALEN, dev->dev_addr);
+        }
+        rcu_read_unlock ();
     }
+    read_unlock (&dev_base_lock);
     return sc;
 }
 
@@ -405,20 +528,24 @@ MODULE_PARM_DESC (intfs, "    get all interfaces on the ttp-gateway");
 
 static int ttp_param_edevs_get (char *buf, const struct kernel_param *kp)
 {
-    int iv, sc = 0, bs = PAGE_SIZE;
-    struct ttp_intf_cfg *dev;
+    int sc = 0, bs = PAGE_SIZE;
+    struct net_device *dev;
 
-    TTP_SNPRINTF (BLUE "%2s  %-8s %17s\n" CLEAR, "if", "device", "device-mac-addr");
+    TTP_SNPRINTF (BLUE "%2s  %-8s %17s  %s\n" CLEAR, "if", "device",
+                  "device-mac-addr", "device-type");
 
-    for (iv = 0; iv < ttp_num_edevs; iv++) {
-        dev = &ttp_edevs[iv];
-        if (!dev->dev) {
-            TTP_SNPRINTF ("%2d %-8s\n", iv, "none");
+    for (dev = first_net_device (&init_net); dev; dev = next_net_device (dev)) {
+        if (dev->flags & IFF_LOOPBACK) {
             continue;
         }
-        TTP_SNPRINTF ("%s%-2d  %-8s %*pM\n" CLEAR,
-                      !strncmp (dev->dev->name, ttp_dev, 8) ? RED : NOCOLOR, iv,
-                      dev->dev->name, ETH_ALEN, dev->dev->dev_addr);
+        if (!(dev->flags & IFF_UP)) {
+            continue;
+        }
+        TTP_SNPRINTF ("%s%2d  %-8s %*pM  %s\n" CLEAR,
+                      ttpip_is_ttp_dev (dev->name) ? RED : NOCOLOR,
+                      dev->ifindex,
+                      dev->name, ETH_ALEN, dev->dev_addr,
+                      ttpip_is_ttp_dev (dev->name) ? "ttp-dev" : "");
     }
     return sc;
 }
@@ -458,7 +585,7 @@ static int ttp_mactbl_rbtree_cmp (const u8 *m1, const u8 *m2)
         return 1;
     }
 
-    /* keep hash-vals in ascending order */
+    /* keep hash-values in ascending order */
     t1 = ttp_tag_index_hash_calc (m1);
     t2 = ttp_tag_index_hash_calc (m2);
     if (t1 < t2) {
@@ -467,7 +594,8 @@ static int ttp_mactbl_rbtree_cmp (const u8 *m1, const u8 *m2)
     else if (t1 > t2) {
         return -1;
     }
-    /* hash-vals equal */
+
+    /* hash-values equal */
     return memcmp (m1, m2, ETH_ALEN);
 }
 
@@ -477,8 +605,8 @@ static struct ttp_mactable *ttp_mactbl_rbtree_add (const u8 *mac)
     struct ttp_mactable *lmc;
     int cmp;
 
-    if (!mutex_trylock (&ttp_mactable_mutx)) {
-        TTP_LOG ("%s: Error: trylock failed [mac %*pM]\n", __FUNCTION__,
+    if (!mutex_trylock (&ttp_mactbl_mutx)) {
+        TTP_LOG ("%s: Error: mac-mutex trylock failed [mac %*pM]\n", __FUNCTION__,
                  ETH_ALEN, mac);
         return NULL;
     }
@@ -495,6 +623,7 @@ static struct ttp_mactable *ttp_mactbl_rbtree_add (const u8 *mac)
             new = &((*new)->rb_right);
         }
         else { /* keys are equal - already exists => lmc */
+            lmc->vld = 1; /* can resurrect a DEAD entry */
             goto end;
         }
     }
@@ -505,34 +634,36 @@ static struct ttp_mactable *ttp_mactbl_rbtree_add (const u8 *mac)
                  ttp_mactbl_ct, ETH_ALEN, mac);
         goto end;
     }
-    if (!(lmc = kzalloc(sizeof(*lmc), GFP_KERNEL))) {
+    if (!(lmc = kzalloc (sizeof (*lmc), GFP_ATOMIC))) {
         TTP_LOG ("%s: Error: kzalloc failed [mac %*pM]\n", __FUNCTION__,
                  ETH_ALEN, mac);
         goto end;
     }
 
-    lmc->val = 1;
+    lmc->vld = 1;
     rb_link_node (&lmc->rbn, parent, new);
     rb_insert_color (&lmc->rbn, &ttp_mactbl_rbroot);
 
     ttp_mactbl_ct++;
-    ether_addr_copy(lmc->mac, mac);
+    ether_addr_copy (lmc->mac, mac);
 
 end:
-    mutex_unlock (&ttp_mactable_mutx);
+    mutex_unlock (&ttp_mactbl_mutx);
     return lmc;
 }
 
-static void ttp_mactbl_rbtree_del (const u8 *mac)
+/* returns 'true' if a mac-delete was done, else returns 'false' */
+static bool ttp_mactbl_rbtree_del (const u8 *mac)
 {
     struct rb_node **new, *parent = NULL;
     struct ttp_mactable *lmc;
+    bool rv = false;
     int cmp;
 
-    if (!mutex_trylock (&ttp_mactable_mutx)) {
-        TTP_LOG ("%s: Error: trylock failed [mac %*pM]\n", __FUNCTION__,
+    if (!mutex_trylock (&ttp_mactbl_mutx)) {
+        TTP_LOG ("%s: Error: mac-mutex trylock failed [mac %*pM]\n", __FUNCTION__,
                  ETH_ALEN, mac);
-        return;
+        return rv;
     }
 
     new = &ttp_mactbl_rbroot.rb_node;
@@ -550,11 +681,13 @@ static void ttp_mactbl_rbtree_del (const u8 *mac)
             ttp_mactbl_ct--;
             rb_erase (&lmc->rbn, &ttp_mactbl_rbroot);
             kfree (lmc);
+            rv = true;
             break;
         }
     }
 
-    mutex_unlock (&ttp_mactable_mutx);
+    mutex_unlock (&ttp_mactbl_mutx);
+    return rv;
 }
 
 static struct ttp_mactable *ttp_mactbl_rbtree_get (const u8 *mac)
@@ -563,8 +696,8 @@ static struct ttp_mactable *ttp_mactbl_rbtree_get (const u8 *mac)
     struct ttp_mactable *lmc;
     int cmp;
 
-    if (!mutex_trylock (&ttp_mactable_mutx)) {
-        TTP_LOG ("%s: Error: trylock failed [mac %*pM]\n", __FUNCTION__,
+    if (!mutex_trylock (&ttp_mactbl_mutx)) {
+        TTP_LOG ("%s: Error: mac-mutex trylock failed [mac %*pM]\n", __FUNCTION__,
                  ETH_ALEN, mac);
         return NULL;
     }
@@ -587,7 +720,7 @@ static struct ttp_mactable *ttp_mactbl_rbtree_get (const u8 *mac)
     lmc = NULL;
 
 end:
-    mutex_unlock (&ttp_mactable_mutx);
+    mutex_unlock (&ttp_mactbl_mutx);
     return lmc;
 }
 
@@ -601,76 +734,77 @@ static struct ttp_mactable *ttp_mactbl_rbtree_get_next (const struct ttp_mactabl
 
 static struct ttp_mactable *ttp_mactbl_find (const char *mac)
 {
+    if (!is_valid_ether_addr (mac)) {
+        return NULL;
+    }
     return ttp_mactbl_rbtree_get (mac);
 }
 
 
 /*
- * Fills out ipv6 header in skb with gw-config from zcfg and
- * returns a pointer to the next header - tesla_shim
+ * Fills out ipv4 header in skb with gw-config from zcfg and
+ * returns a pointer to the next header
  */
-static struct ttp_tsla_shim_hdr *ttp_prepare_ipv4 (u8 *pkt, u16 len, struct ttp_intf_cfg *zcfg)
+static u8 *ttp_prepare_ipv4 (u8 *pkt, int len, const struct ttp_intf_cfg *zcfg)
 {
     u16 frame_len;
-    struct ttp_intf_cfg *intf;
     struct iphdr *ipv4 = (struct iphdr *)pkt;
+
+    frame_len = ETH_HLEN + sizeof (struct iphdr) + len;
+    if (frame_len > TTP_MAX_FRAME_LEN) {
+        return NULL;
+    }
+    frame_len = max (frame_len, TTP_MIN_FRAME_LEN);
 
     memset (ipv4, 0, sizeof (*ipv4));
     ipv4->version = 4;
     ipv4->ihl = 5;
     ipv4->ttl = 9;
     ipv4->protocol = IPPROTO_TTP;
-
-    if (!(intf = ttp_intf_get (zcfg, 4))) {
-        return NULL;
-    }
-
-    ipv4->saddr = intf->ip4.s_addr;
-    ipv4->daddr = zcfg->ip4.s_addr;
-    frame_len = ETH_HLEN + sizeof (struct iphdr) + len;
-    frame_len = max (frame_len, TTP_MIN_FRAME_LEN);
+    ipv4->saddr = zcfg->sa4.s_addr;
+    ipv4->daddr = zcfg->da4.s_addr;
     ipv4->tot_len = htons (frame_len - ETH_HLEN);
     ipv4->check = ip_fast_csum ((unsigned char *)ipv4, ipv4->ihl);
 
     ttp_print_ipv4_hdr (ipv4);
 
-    return (struct ttp_tsla_shim_hdr *)(ipv4 + 1);
+    return (u8 *)(ipv4 + 1);
 }
 
 
 /*
  * Fills out ipv6 header in skb with gw-config from zcfg and
- * returns a pointer to the next header - tesla_shim
+ * returns a pointer to the next header
  */
-static struct ttp_tsla_shim_hdr *ttp_prepare_ipv6 (u8 *pkt, u16 len, struct ttp_intf_cfg *zcfg)
+static u8 *ttp_prepare_ipv6 (u8 *pkt, int len, const struct ttp_intf_cfg *zcfg)
 {
     u16 frame_len;
     struct ipv6hdr *ipv6 = (struct ipv6hdr *)pkt;
-    struct ttp_intf_cfg *intf;
+
+    frame_len = ETH_HLEN + sizeof (struct ipv6hdr) + len;
+    if (frame_len > TTP_MAX_FRAME_LEN) {
+        return NULL;
+    }
+    frame_len = max (frame_len, TTP_MIN_FRAME_LEN);
 
     memset (ipv6, 0, sizeof (*ipv6));
     ipv6->version = 6;
     ipv6->nexthdr = IPPROTO_TTP;
     ipv6->hop_limit = 9;
-
-    if (!(intf = ttp_intf_get (zcfg, 6))) {
-        return NULL;
-    }
-
-    ipv6->saddr = intf->ip6;
-    ipv6->daddr = zcfg->ip6;
-    frame_len = ETH_HLEN + sizeof (struct ipv6hdr) + len;
-    frame_len = max (frame_len, TTP_MIN_FRAME_LEN);
+    ipv6->saddr = zcfg->sa6;
+    ipv6->daddr = zcfg->da6;
     ipv6->payload_len = htons (frame_len - ETH_HLEN - sizeof (struct ipv6hdr));
 
     ttp_print_ipv6_hdr (ipv6);
 
-    return (struct ttp_tsla_shim_hdr *)(ipv6 + 1);
+    return (u8 *)(ipv6 + 1);
 }
 
 
-static void ttp_prepare_tth (struct ttp_tsla_type_hdr *tth, u16 len)
+static u8 *ttp_prepare_tth (u8 *pkt, int len)
 {
+    struct ttp_tsla_type_hdr *tth = (struct ttp_tsla_type_hdr *)pkt;
+
     tth->styp = 0;
     tth->vers = 0;
     tth->tthl = TTP_PROTO_TTHL;
@@ -678,123 +812,43 @@ static void ttp_prepare_tth (struct ttp_tsla_type_hdr *tth, u16 len)
     tth->resv = 0;
     tth->tot_len = htons (len);
     memset (tth->pad, 0, sizeof (tth->pad));
+
+    return (u8 *)(tth + 1);
 }
 
 
-static void ttp_mac_info_send_to_gws (char *mac, enum ttp_mac_opcodes opc)
-{
-    int zn;
-    u8 *opv, *pkt;
-    u16 frame_len, pkt_len;
-    struct sk_buff *skb;
-    struct ethhdr *eth;
-    struct ttp_tsla_shim_hdr *tsh;
-    struct ttp_intf_cfg *zcfg;
-
-    if (!(opc == TTP_REMOTE_DEL || opc == TTP_REMOTE_ADD || opc == TTP_GATEWAY)) {
-        return;
-    }
-
-    for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
-        if (zn == ttp_myzn) {
-            continue;
-        }
-        zcfg = &ttp_zones[zn];
-        if (zcfg->ver != 4 && zcfg->ver != 6) {
-            continue;
-        }
-        if (!(skb = ttpip_skb_aloc ())) {
-            TTP_LOG ("%s: Error: mac %*phC - send to zone %d failed\n",
-                     __FUNCTION__, ETH_ALEN, mac, zn);
-            return;
-        }
-
-        TTP_DBG ("%s: mac %*phC - send to zone %d\n", __FUNCTION__,
-                 ETH_ALEN, mac, zn);
-
-        eth = (struct ethhdr *)skb_mac_header (skb);
-        pkt = (u8 *)(eth + 1);
-        memcpy (eth->h_source, zcfg->dev->dev_addr, ETH_ALEN);
-        memcpy (eth->h_dest, zcfg->mac, ETH_ALEN);
-
-        /* Make canonical skb */
-        skb_reset_mac_header (skb);
-        skb_reset_network_header (skb);
-
-        pkt_len = sizeof (struct ttp_tsla_shim_hdr) + 2; /* control pkt, 2B [opc, resv] */
-        tsh = NULL;
-        if (zcfg->ver == 4) {
-            skb->protocol = eth->h_proto = htons (ETH_P_IP);
-            tsh = ttp_prepare_ipv4 (pkt, pkt_len, zcfg);
-            frame_len = ETH_HLEN + sizeof (struct iphdr) + pkt_len;
-        }
-        else if (zcfg->ver == 6) {
-            skb->protocol = eth->h_proto = htons (ETH_P_IPV6);
-            tsh = ttp_prepare_ipv6 (pkt, pkt_len, zcfg);
-            frame_len = ETH_HLEN + sizeof (struct ipv6hdr) + pkt_len;
-        }
-        if (!tsh) {
-            kfree_skb (skb);
-            continue;
-        }
-
-        memmove (tsh->src_node, &ttpip_etype_tsla.dev->dev_addr[3], ETH_ALEN/2);
-        memmove (tsh->dst_node, &mac[3], ETH_ALEN/2);
-        tsh->length = 0; /* 0 => control packet; decode next 2-bytes as [opc, resv] */
-        ttp_print_shim_hdr (tsh);
-
-        opv = (u8 *)(tsh + 1);
-        switch (opc) {
-        case TTP_REMOTE_DEL:
-            *opv = 0;
-            break;
-        case TTP_REMOTE_ADD:
-            *opv = 1;
-            break;
-        case TTP_GATEWAY:
-            *opv = 2;
-            break;
-        default:
-            BUG_ON (1);         /* can't happen - if check done at beginning */
-        }
-
-        skb->dev = zcfg->dev;    /* forward to gateway */
-        ttpip_pretty_print_data ("raw:", 16, true, skb->dev->name, (u8 *)eth, skb->len);
-        TTP_DBG ("`<<- Tx packet: len:%d dev:%s\n", skb->len, skb->dev->name);
-
-        skb_trim (skb, max (frame_len, TTP_MIN_FRAME_LEN));
-        skb_reset_network_header (skb);
-        skb_reset_mac_header (skb);
-        dev_queue_xmit (skb);
-    }
-}
-
-
-static int ttp_mactbl_add (int zn, char *mac, enum ttp_mac_opcodes opc)
+static int ttp_mactbl_add (int zn, const char *mac, enum ttp_mac_opcodes oc)
 {
     struct ttp_mactable *mct;
 
     if (!mac) {
         return -EINVAL;
     }
-    if (!(zn > 0 && zn < TTP_MAX_NUM_ZONES)) {
-        return -ELNRNG;
+    if (!ttp_zone_valid (zn)) {
+        return -EINVAL;
     }
-
+    if (!is_valid_ether_addr (mac)) {
+        return -EINVAL;
+    }
     if (!(mct = ttp_mactbl_rbtree_add (mac))) {
         return -ENOMEM;
     }
 
-    switch (opc) {
-    case TTP_LOCAL:
-        ttp_mac_info_send_to_gws (mac, TTP_REMOTE_ADD);
+    switch (oc) {
+    case TTP_GW_CTL_OP_LOCAL_ADD:
+        /* send locally added mac to other gateways */
+        ttp_gw_ctl_send (mac, TTP_GW_CTL_OP_REMOTE_ADD);
         mct->rem = 0;
         break;
-    case TTP_GATEWAY:
+    case TTP_GW_CTL_OP_GATEWAY_SLF:
+        mct->gwf = 1;
+        mct->prm = 1;
+        break;
+    case TTP_GW_CTL_OP_GATEWAY_ADD:
         mct->gwf = 1;
         mct->rem = 1;
         break;
-    case TTP_REMOTE_ADD:
+    case TTP_GW_CTL_OP_REMOTE_ADD:
         mct->rem = 1;
         break;
     default:
@@ -803,7 +857,7 @@ static int ttp_mactbl_add (int zn, char *mac, enum ttp_mac_opcodes opc)
     }
 
     mct->age = 0;
-    if (mct->zon) {            /* existing entry */
+    if (ttp_zone_valid (mct->zon)) {            /* existing entry */
         return EEXIST;
     }
     mct->zon = zn;
@@ -812,95 +866,158 @@ static int ttp_mactbl_add (int zn, char *mac, enum ttp_mac_opcodes opc)
 }
 
 
-static void ttp_mactbl_del (int zn, char *mac)
+static int ttp_mactbl_del (int zn, const char *mac, enum ttp_mac_opcodes oc)
 {
     if (!mac) {
-        return;
+        return 0;
     }
-    if (!(zn > 0 && zn < TTP_MAX_NUM_ZONES)) {
-        return;
+    if (!is_valid_ether_addr (mac)) {
+        return 0;
     }
 
-    ttp_mactbl_rbtree_del (mac);
+    switch (oc) {
+    case TTP_GW_CTL_OP_LOCAL_DEL:
+        break;
+    case TTP_GW_CTL_OP_REMOTE_DEL:
+        break;
+    default:
+        BUG_ON (1);
+        break;
+    }
+
+    return ttp_mactbl_rbtree_del (mac);
 }
 
-#define CLIF(ag) ((ag)<3?0:(ag)) /* to filter thrashing output around '0' age */
 
-#define TTP_SNPRINTF_COMMON                                  \
-    do {                                                     \
-        TTP_SNPRINTF ("%2d  0x%02x  %*pM  %c-%c  %6d   ",    \
-                      mct->zon,                              \
-                      ttp_tag_index_hash_calc (mct->mac),    \
-                      ETH_ALEN, mct->mac,                    \
-                      mct->rem ? 'r' : 'l',                  \
-                      mct->gwf ? 'g' : '-',                  \
-                      CLIF (mct->age) * TTP_GW_MAC_ADV_TMR); \
+#define CLIF(ag) ((ag) <2 ? 0: (ag)) /* to filter thrashing output around '0' age */
+
+#define TTP_PRINTF_COMMON(colr)                                 \
+    do {                                                        \
+        TTP_SNPRINTF ("%s%2d%c 0x%02x  %*pM  %c%c%c%c %6d   ",  \
+                      colr,                                     \
+                      mct->zon,                                 \
+                      ttp_myzone (mct->zon) ? '*' : ' ',        \
+                      ttp_tag_index_hash_calc (mct->mac),       \
+                      ETH_ALEN, mct->mac,                       \
+                      mct->vld ? 'v' : '-',                     \
+                      mct->prm ? 'p' : '-',                     \
+                      mct->rem ? 'r' : 'l',                     \
+                      mct->gwf ? 'g' : '-',                     \
+                      CLIF (mct->age) * TTP_GW_CTL_ADV_TMR);    \
     } while (0)
 
-#define TTP_SNPRINTF_COMMON_LOCAL(cond) \
-    do {                                \
-        if (cond) {                     \
-            continue;                   \
-        }                               \
-        TTP_SNPRINTF_COMMON;            \
-        TTP_SNPRINTF ("<local>\n");     \
+#define TTP_PRINTF_LOCAL(colr, cond)                            \
+    do {                                                        \
+        struct ttp_mactable *mct = NULL;                        \
+                                                                \
+        while ((mct = ttp_mactbl_rbtree_get_next (mct))) {      \
+            if ((cond)) {                                       \
+                TTP_PRINTF_COMMON (colr);                       \
+                TTP_SNPRINTF ("%7lld  %6d   "                   \
+                              "%7lld  %6d\n",                   \
+                              mct->t.byt, mct->t.frm,           \
+                              mct->r.byt, mct->r.frm);          \
+            }                                                   \
+        }                                                       \
     } while (0)
 
-#define TTP_SNPRINTF_COMMON_IPADDR(cond)             \
-    do {                                             \
-        if (cond) {                                  \
-            continue;                                \
-        }                                            \
-        TTP_SNPRINTF_COMMON;                         \
-        if (ttp_zones[mct->zon].ver == 4) {          \
-            TTP_SNPRINTF ("%pI4\n",                  \
-                          &ttp_zones[mct->zon].ip4); \
-        }                                            \
-        else if (ttp_zones[mct->zon].ver == 6) {     \
-            TTP_SNPRINTF ("%pI6\n",                  \
-                          &ttp_zones[mct->zon].ip6); \
-        }                                            \
+#define TTP_PRINTF_GWIP(colr, cond)                             \
+    do {                                                        \
+        struct ttp_mactable *mct = NULL;                        \
+        struct ttp_intf_cfg *zcfg;                              \
+                                                                \
+        while ((mct = ttp_mactbl_rbtree_get_next (mct))) {      \
+            if ((cond)) {                                       \
+                TTP_PRINTF_COMMON (colr);                       \
+                if ((zcfg = ttp_zcfg (mct->zon))) {             \
+                    if (zcfg->ver == 4) {                       \
+                        TTP_SNPRINTF ("%pI4\n", &zcfg->da4);    \
+                    }                                           \
+                    else if (zcfg->ver == 6) {                  \
+                        TTP_SNPRINTF ("%pI6c\n", &zcfg->da6);   \
+                    }                                           \
+                }                                               \
+                else {                                          \
+                    TTP_SNPRINTF ("<none>\n");                  \
+                }                                               \
+            }                                                   \
+        }                                                       \
     } while (0)
+
+#define TTP_MACTBL_TALLY(cond)                                  \
+    ({                                                          \
+        int taly = 0;                                           \
+                                                                \
+        struct ttp_mactable *mct = NULL;                        \
+        while ((mct = ttp_mactbl_rbtree_get_next (mct))) {      \
+            if ((cond)) {                                       \
+                taly++;                                         \
+            }                                                   \
+        }                                                       \
+        taly;                                                   \
+    })
+
+#define TTP_MACTBL_LOCL(colr, cond, arg...)                     \
+    do {                                                        \
+        if (TTP_MACTBL_TALLY (cond)) {                          \
+            TTP_SNPRINTF (arg);                                 \
+            TTP_PRINTF_LOCAL (colr, cond);                      \
+        }                                                       \
+    } while (0)
+
+#define TTP_MACTBL_GWIP(colr, cond, arg...)                     \
+    do {                                                        \
+        if (TTP_MACTBL_TALLY (cond)) {                          \
+            TTP_SNPRINTF (arg);                                 \
+            TTP_PRINTF_GWIP (colr, cond);                       \
+        }                                                       \
+    } while (0)
+
 
 static int ttp_param_mactbl_get (char *buf, const struct kernel_param *kp)
 {
     int sc = 0, bs = PAGE_SIZE;
-    struct ttp_mactable *mct = NULL;
 
     if (!ttp_mactbl_ct) {
         TTP_SNPRINTF ("<empty>\n");
         return sc;
     }
-
-    if (!mutex_trylock (&ttp_mactable_mutx)) {
-        TTP_SNPRINTF ("%s: Error: trylock failed\n", __FUNCTION__);
+    if (!mutex_trylock (&ttp_mactbl_mutx)) {
+        TTP_SNPRINTF ("%s: Error: mac-mutex trylock failed\n", __FUNCTION__);
         return sc;
     }
 
-    TTP_SNPRINTF (BLUE "%2s  %4s  %17s  %3s  %7s  %8s\n",
-                  "zn", "hash", "--- mac-addrs ---", "rlg", "age(ms)",
-                  "next-hop-gateway");
+    TTP_SNPRINTF (BLUE "%2s  %4s  %17s  %4s %7s  %-25s\n", "zn", "hash",
+                  "--- mac-addrs ---", "flag", "age(ms)", "next-hop-gateway");
 
-    TTP_SNPRINTF (CYAN "  Local entries:\n");
-    while ((mct = ttp_mactbl_rbtree_get_next (mct))) {
-        TTP_SNPRINTF_COMMON_LOCAL (!mct->val || mct->rem);
-    }
+    /* permanent gateway entries (self-gw): valid, PERMANENT, gateway, (rem=x) */
+    TTP_MACTBL_GWIP (MAGENTA, mct->vld && mct->prm && mct->gwf,
+                     GREEN "%27s  %4s %7s  %-25s\n", "Gateway MAC addresses:",
+                     "flag", "age(ms)", "next-hop-gateway");
+    /* other gateway entries: valid, NOT permanent, GATEWAY, (rem=x) */
+    TTP_MACTBL_GWIP (GREEN, mct->vld && !mct->prm && mct->gwf, GREEN);
 
-    TTP_SNPRINTF (YELLOW " Remote entries:\n");
-    while ((mct = ttp_mactbl_rbtree_get_next (mct))) {
-        TTP_SNPRINTF_COMMON_IPADDR (!mct->val || !mct->rem || mct->gwf);
-    }
+    /* remote entries: valid, not permanent, not gw, REMOTE */
+    TTP_MACTBL_GWIP (YELLOW, mct->vld && !mct->prm && !mct->gwf && mct->rem,
+                     YELLOW "%27s  %4s %7s  %-25s\n", "Remote Live MAC addresses:",
+                     "flag", "age(ms)", "next-hop-gateway");
 
-    TTP_SNPRINTF (GREEN "Gateway entries:\n");
-    while ((mct = ttp_mactbl_rbtree_get_next (mct))) {
-        TTP_SNPRINTF_COMMON_IPADDR (!mct->val || !mct->gwf);
-    }
+    /* local live entries: valid, not permanent, not gw, NOT remote */
+    TTP_MACTBL_LOCL (CYAN, !mct->age && mct->vld && !mct->prm && !mct->gwf && !mct->rem,
+                     CYAN "%27s  %4s %7s %s\n", "Local Live MAC addresses:",
+                     "flag", "age(ms)", " tx-byts tx-pkts   rx-byts rx-pkts");
 
-    mutex_unlock (&ttp_mactable_mutx);
+    /* local aging entries: valid, not permanent, not gw, NOT remote */
+    TTP_MACTBL_LOCL (WHITE, mct->age && mct->vld && !mct->prm && !mct->gwf && !mct->rem,
+                     WHITE "%27s  %4s %7s %s\n", "Local Aging MAC addresses:",
+                     "flag", "age(ms)", " tx-byts tx-pkts   rx-byts rx-pkts");
 
-    TTP_SNPRINTF (WHITE "key: " BLUE "alive < %dms <= old < %dms(max) tot#: %d\n" CLEAR,
-                  TTP_MAC_AGEOUT_OLD * TTP_GW_MAC_ADV_TMR,
-                  TTP_MAC_AGEOUT_MAX * TTP_GW_MAC_ADV_TMR, ttp_mactbl_ct);
+    /* local dead entries: invalid / dead entries */
+    TTP_MACTBL_LOCL (BLUE, !mct->vld && !mct->gwf,
+                     BLUE "%27s  %4s %7s %s\n", "Local Dead MAC addresses:",
+                     "flag", "age(ms)", " tx-byts tx-pkts   rx-byts rx-pkts");
+
+    mutex_unlock (&ttp_mactbl_mutx);
     return sc;
 }
 
@@ -955,64 +1072,83 @@ MODULE_PARM_DESC (verbose, "  kernel log verbosity level (default=(-1), 0, 1, 2)
 static int ttp_nh4_mac_get (struct ttp_intf_cfg *zcfg)
 {
     int rv = 0;
+    u32 mask;
     u8 mac[ETH_ALEN];
     struct in_addr nh4;
     struct rtable *rt4;
+    struct in_ifaddr *ifa4;
     struct neighbour *neigh;
-    struct ttp_intf_cfg *intf;
+    struct ttp_intf_cfg *myzcfg;
 
-    if (IS_ERR (rt4 = ip_route_output (&init_net, zcfg->ip4.s_addr, 0, 0, 0))) {
-        TTP_LOG ("%s: Error: route lookup failed: ttp-gw:%pI4\n", __FUNCTION__, &zcfg->ip4);
-        rv = PTR_ERR (rt4);
+    if (!(myzcfg = ttp_myzcfg ())) {
+        TTP_LOG ("%s: Error: my own zone lookup failed\n", __FUNCTION__);
+        rv = -ENETDOWN;
+        goto end;
+    }
+    if (IS_ERR (rt4 = ip_route_output (&init_net, zcfg->da4.s_addr, 0, 0, 0))) {
+        TTP_LOG ("%s: Error: route lookup failed: ttp-gw:%pI4\n", __FUNCTION__,
+                 &zcfg->da4);
+        rv = -ENETUNREACH;
         goto end;
     }
     if ((rt4->dst.dev->flags & IFF_LOOPBACK) || (!(rt4->dst.dev->flags & IFF_UP))) {
         TTP_LOG ("%s: Error: dev lookup failed: %s is %s\n", __FUNCTION__,
-                 rt4->dst.dev->name, rt4->dst.dev->flags & IFF_LOOPBACK ? "LOOPBACK" : "!UP");
-        rv = -EINVAL;
+                 rt4->dst.dev->name,
+                 rt4->dst.dev->flags & IFF_LOOPBACK ? "LOOPBACK" : "!UP");
+        rv = -ENODEV;
         goto end;
     }
+
     zcfg->dev = rt4->dst.dev;
-    if ((intf = ttp_intf_get (zcfg, 4))) {
-        zcfg->pfl = intf->pfl;
-    }
     zcfg->gwy = !!rt4->rt_uses_gateway;
-    nh4.s_addr = !zcfg->gwy ? zcfg->ip4.s_addr : rt4->rt_gw4;
+    nh4.s_addr = !zcfg->gwy ? zcfg->da4.s_addr : rt4->rt_gw4;
 
     if (!(neigh = dst_neigh_lookup (&rt4->dst, &nh4))) {
-        TTP_LOG ("%s: Error: neighbor lookup failed: nh-ip4:%pI4\n", __FUNCTION__, &nh4);
-        rv = PTR_ERR (neigh);
+        TTP_LOG ("%s: Error: neighbor lookup failed: nh-ip4:%pI4\n", __FUNCTION__,
+                 &nh4);
+        rv = -EHOSTUNREACH;
         goto end;
     }
+
     memcpy (zcfg->mac, neigh->ha, ETH_ALEN);
     neigh_release (neigh);
     dst_release (&rt4->dst);
+
     if (is_valid_ether_addr (zcfg->mac)) {
-        if (!zcfg->gwy) {
-            TTP_DBG ("`->zn:%d gw: %pI4 -> mac:%*pM ->\n"
-                     "      `-->via: direct -> dev:%s\n",
-                     zcfg->zon, &zcfg->ip4, ETH_ALEN, zcfg->mac, zcfg->dev->name);
+        /* Iterate over ipv4 addrs on 'gw-dev' whose subnet == next-hop-ipv4
+         * Set src-ipv4 of the v4-gw - used when sending gw-ctrl pkts to v4-gateways */
+        rcu_read_lock ();
+        for (ifa4 = rcu_dereference (zcfg->dev->ip_ptr->ifa_list); ifa4;
+             ifa4 = rcu_dereference (ifa4->ifa_next)) {
+            mask = inet_make_mask (ifa4->ifa_prefixlen);
+            if ((nh4.s_addr & mask) == (ifa4->ifa_address & mask)) {
+                zcfg->sa4.s_addr = ifa4->ifa_address;
+                break;
+            }
         }
-        else {
-            TTP_DBG ("`->zn:%d gw: %pI4 -> mac:%*pM ->\n"
-                     "      `-->via: router:%pI4 -> dev:%s\n",
-                     zcfg->zon, &zcfg->ip4, ETH_ALEN, zcfg->mac, &nh4, zcfg->dev->name);
-        }
+        rcu_read_unlock ();
+
+        TTP_LOG ("  `->zn:%d gw:%pI4 -> mac:%*pM\n"
+                 "    `->via:%s:%pI4 -> dev:%s\n",
+                 zcfg->zon, &zcfg->da4, ETH_ALEN, zcfg->mac,
+                 zcfg->gwy ? "rt-v4" : "dir-arp", &nh4, zcfg->dev->name);
+
         rv = 0;  /* success */
     }
     else {
-        TTP_DBG ("`->nh-mac: %pI4 unresolved, re-try arp\n", &nh4);
+        TTP_LOG ("`->nh-mac: %pI4 unresolved, re-try arp\n", &nh4);
         eth_broadcast_addr (mac);
-        arp_send (ARPOP_REQUEST, ETH_P_ARP, nh4.s_addr, zcfg->dev,
-                  ttp_zones[ttp_myzn].ip4.s_addr, mac,
-                  ttp_zones[ttp_myzn].dev->dev_addr, mac);
+        arp_send (ARPOP_REQUEST, ETH_P_ARP, nh4.s_addr,
+                  (struct net_device *)zcfg->dev,
+                  myzcfg->da4.s_addr, mac, myzcfg->dev->dev_addr, mac);
         rv = EAGAIN;
     }
+
 end:
     return rv;
 }
 
-#define DST2RT6(dst) container_of(dst, struct rt6_info, dst)
+#define DST2RT6(dst) container_of (dst, struct rt6_info, dst)
 
 static int ttp_nh6_mac_get (struct ttp_intf_cfg *zcfg)
 {
@@ -1020,79 +1156,84 @@ static int ttp_nh6_mac_get (struct ttp_intf_cfg *zcfg)
     struct flowi6 fl6;
     struct in6_addr nh6;
     struct rt6_info *rt6;
+    struct list_head *lhp;
     struct dst_entry *dst;
     struct neighbour *neigh;
-    struct ttp_intf_cfg *intf;
+    struct inet6_ifaddr *ifa6;
 
     memset (&fl6, 0, sizeof fl6);
-    fl6.daddr = zcfg->ip6;
+    fl6.daddr = zcfg->da6;
     if (IS_ERR (dst = ip6_route_output_flags (&init_net, NULL, &fl6, 0))) {
-        TTP_LOG ("%s: Error: route6 lookup failed: gw:%pI6c\n", __FUNCTION__, &zcfg->ip6);
-        rv = PTR_ERR (dst);
+        TTP_LOG ("%s: Error: route6 lookup failed: gw:%pI6c\n", __FUNCTION__,
+                 &zcfg->da6);
+        rv = -ENETUNREACH;
         goto end;
     }
     if ((dst->dev->flags & IFF_LOOPBACK) || (!(dst->dev->flags & IFF_UP))) {
         TTP_LOG ("%s: Error: dev lookup failed: %s is %s\n", __FUNCTION__,
                  dst->dev->name, dst->dev->flags & IFF_LOOPBACK ? "LOOPBACK" : "!UP");
-        rv = PTR_ERR (neigh);
+        rv = -ENODEV;
         goto end;
     }
     zcfg->dev = dst->dev;
-    if ((intf = ttp_intf_get (zcfg, 6))) {
-        zcfg->pfl = intf->pfl;
-    }
     rt6 = DST2RT6 (dst);
     zcfg->gwy = !!(rt6->rt6i_flags & RTF_GATEWAY);
-    nh6 = !zcfg->gwy ? zcfg->ip6 : rt6->rt6i_gateway;
+    nh6 = !zcfg->gwy ? zcfg->da6 : rt6->rt6i_gateway;
     if (!(neigh = dst_neigh_lookup (&rt6->dst, &nh6))) {
-        TTP_LOG ("%s: Error: neighbor lookup failed: nh-ip6:%pI6c\n", __FUNCTION__, &nh6);
-        rv = PTR_ERR (neigh);
+        TTP_LOG ("%s: Error: neighbor lookup failed: nh-ip6:%pI6c\n", __FUNCTION__,
+                 &nh6);
+        rv = -EHOSTUNREACH;
         goto end;
     }
+
     memcpy (zcfg->mac, neigh->ha, ETH_ALEN);
+    neigh_release (neigh);
     dst_release (&rt6->dst);
+
     if (is_valid_ether_addr (zcfg->mac)) {
-        if (!zcfg->gwy) {
-            TTP_DBG ("`->zn:%d gw: %pI6c -> mac:%*pM ->\n"
-                     "      `-->via: direct -> dev:%s\n",
-                     zcfg->zon, &zcfg->ip6, ETH_ALEN, zcfg->mac, zcfg->dev->name);
+        /* Iterate over ipv6 addrs on 'gw-dev' whose subnet == next-hop-ipv6
+         * Set src-ipv6 of the v6-gw - used when sending gw-ctrl pkts to v6-gateways */
+        rcu_read_lock ();
+        list_for_each (lhp, &zcfg->dev->ip6_ptr->addr_list) {
+            if (!(ifa6 = list_entry (lhp, struct inet6_ifaddr, if_list))) {
+                break;
+            }
+            if (ipv6_prefix_equal (&nh6, &ifa6->addr, ifa6->prefix_len)) {
+                zcfg->sa6 = ifa6->addr;
+                break;
+            }
         }
-        else {
-            TTP_DBG ("`->zn:%d gw: %pI6c -> mac:%*pM ->\n"
-                     "      `-->via: router:%pI6c -> dev:%s\n",
-                     zcfg->zon, &zcfg->ip6, ETH_ALEN, zcfg->mac, &nh6, zcfg->dev->name);
-        }
+        rcu_read_unlock ();
+
+        TTP_LOG ("  `->zn:%d gw:%pI6c -> mac:%*pM\n"
+                 "    `->via:%s:%pI6c -> dev:%s\n",
+                 zcfg->zon, &zcfg->da6, ETH_ALEN, zcfg->mac,
+                 zcfg->gwy ? "rt-v6" : "dir-nd6", &nh6, zcfg->dev->name);
+
         rv = 0;  /* success */
     }
     else {
-        TTP_DBG ("`->nh-mac: %pI6c unresolved, re-try nd6\n", &nh6);
+        TTP_LOG ("`->nh-mac: %pI6c unresolved, re-try nd6\n", &nh6);
         neigh_resolve_output (neigh, NULL);
         rv = EAGAIN;
     }
+
 end:
     return rv;
 }
 
 
-static int ttp_nhmac_get (u16 zn)
+static int ttp_nhmac_get (struct ttp_intf_cfg *zcfg)
 {
     int rv = 0;
-    struct ttp_intf_cfg *zcfg;
 
-    if (zn == ttp_myzn) {
-        TTP_DBG ("%s: zn:%d is my_zone\n", __FUNCTION__, zn);
-        goto end;
-    }
-    if (!(zcfg = ttp_intf_cfg_get (zn))) {
-        rv = -EINVAL;
-        goto end;
-    }
     if (is_valid_ether_addr (zcfg->mac)) {
-        TTP_DBG ("%s: zn:%d has a valid gwmac:%*phC\n", __FUNCTION__,
-                 zn, ETH_ALEN, zcfg->mac);
+        if (ttp_verbose > 0) {
+            TTP_DBG ("%s: zn:%d has a valid gwmac:%*phC\n", __FUNCTION__,
+                     zcfg->zon, ETH_ALEN, zcfg->mac);
+        }
         goto end;
     }
-
     if (zcfg->ver == 4) {
         rv = ttp_nh4_mac_get (zcfg);
     }
@@ -1100,9 +1241,9 @@ static int ttp_nhmac_get (u16 zn)
         rv = ttp_nh6_mac_get (zcfg);
     }
     else {
-        TTP_LOG ("%s: Error: zn:%d Wrong gw-ver:%d\n", __FUNCTION__, zn, zcfg->ver);
-        rv = -EINVAL;
+        BUG_ON (1);
     }
+
 end:
     return rv;
 }
@@ -1110,90 +1251,303 @@ end:
 
 static int ttp_all_nhmacs_get (void)
 {
+    int zn;
     int ir, rv = 0;
-    u16 zn;
+    struct ttp_intf_cfg *zcfg;
 
     for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
-        if (!(ir = ttp_nhmac_get (zn))) {
+        if (ttp_myzone (zn)) { /* skip resolving nh to myself */
             continue;
         }
-        if (!rv && (EAGAIN == ir)) {
-            rv = EAGAIN;
+        if (!(zcfg = ttp_zcfg (zn))) {
+            continue;
         }
+        if (zcfg->ver != 4 && zcfg->ver != 6) {
+            continue;
+        }
+        if (!(ir = ttp_nhmac_get (zcfg))) {
+            continue;
+        }
+        if (EAGAIN == ir) {
+            rv = EAGAIN;
+            continue;
+        }
+        return ir; /* nhmac_get error */
     }
     return rv;
 }
 
 
-static void ttp_gw_local_mac_learn (struct ethhdr *eth)
+static void ttp_gw_local_mac_learn (const char *mac)
 {
-    int rc;
+    int rv;
 
-    if ((rc = ttp_mactbl_add (ttp_myzn, eth->h_source, TTP_LOCAL))) {
-        if (rc != EEXIST) {
-            TTP_LOG ("`-> Error: mac-table full (rv:%d)\n", rc);
+    if ((rv = ttp_mactbl_add (ttp_myzn, mac, TTP_GW_CTL_OP_LOCAL_ADD))) {
+        if (rv != EEXIST) {
+            TTP_LOG ("`-> Error: mac-table full (rv:%d)\n", rv);
             return;
         }
     }
-    TTP_DBG ("%s: gw_mac_adv: zn:%d  mac:%*phC%s\n", __FUNCTION__, ttp_myzn,
-             ETH_ALEN, eth->h_source, rc == EEXIST ? "" : " (new)");
+    if (ttp_verbose > 0) {
+        TTP_DBG ("%s: gw_mac_adv: zn:%d  mac:%*phC%s\n", __FUNCTION__, ttp_myzn,
+                 ETH_ALEN, mac, rv == EEXIST ? "" : " (new)");
+    }
 }
 
 
-static void ttp_gw_control_handle (struct ethhdr *eth, int ver,
-                                   struct iphdr *ipv4, struct ipv6hdr *ipv6,
-                                   struct ttp_tsla_shim_hdr *tsh)
+static void ttp_gw_ctl_send (const char *mac, enum ttp_mac_opcodes oc)
 {
-    int rc, zn;
-    u8 *opv;
-    struct in_addr ip4a;
-    struct in6_addr ip6a;
-    enum ttp_mac_opcodes opc;
+    int zn;
+    u8 *op, *pkt;
+    u16 frame_len, pkt_len;
+    struct sk_buff *skb;
+    struct ethhdr *eth;
+    struct ttp_tsla_shim_hdr *tsh;
+    struct ttp_intf_cfg *zcfg;
 
-    if (ver == 4) {
-        ip4a.s_addr = ipv4->saddr;
-        zn = ttp_gw_ipv4_get (&ip4a);
-    }
-    else if (ver == 6) {
-        ip6a = ipv6->saddr;
-        zn = ttp_gw_ipv6_get (&ip6a);
-    }
-    else {
-        return;
-    }
-    if (zn <= 0) {
-        TTP_LOG ("%s: Invalid zone(%d) for mac-learn: %*phC\n", __FUNCTION__,
-                 zn, ETH_ALEN, eth->h_dest);
+    if (!(oc == TTP_GW_CTL_OP_REMOTE_DEL ||
+          oc == TTP_GW_CTL_OP_REMOTE_ADD ||
+          oc == TTP_GW_CTL_OP_GATEWAY_ADD)) {
         return;
     }
 
-    opv = (u8 *)(tsh + 1);
-    if (*opv) {
-        if (*opv == 1) {
-            opc = TTP_REMOTE_ADD;
+    for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
+        if (ttp_myzone (zn)) { /* skip sending gw-ctrl to myself */
+            continue;
         }
-        else if (*opv == 2) {
-            opc = TTP_GATEWAY;
+        if (!(zcfg = ttp_zcfg (zn))) {
+            continue;
         }
-        else {
-            TTP_LOG ("%s: Invalid op(%d) mac ?Add/Del?: %*phC from zone %d\n",
-                     __FUNCTION__, *opv, ETH_ALEN, eth->h_dest, zn);
+        if (!zcfg->dev) {
+            continue;
+        }
+        if (!is_valid_ether_addr (zcfg->mac)) {
+            continue;
+        }
+        if (!(skb = ttpip_skb_aloc ())) {
+            TTP_LOG ("%s: Error: send mac:%*phC -> zn:%d failed: ENOMEM\n",
+                     __FUNCTION__, ETH_ALEN, mac, zn);
             return;
         }
+        if (ttp_verbose > 0) {
+            TTP_DBG ("%s: send mac:%*phC -> zn:%d\n", __FUNCTION__, ETH_ALEN, mac, zn);
+        }
 
-        TTP_DBG ("%s: Add mac: %*phC from zone %d\n", __FUNCTION__,
-                 ETH_ALEN, eth->h_dest, zn);
-        if ((rc = ttp_mactbl_add (zn, eth->h_dest, opc))) {
-            if (rc != EEXIST) {
-                TTP_LOG ("`-> Error: mac-table full (rv:%d)\n", rc);
+        eth = (struct ethhdr *)skb_mac_header (skb);
+        pkt = (u8 *)(eth + 1);
+        memcpy (eth->h_source, zcfg->dev->dev_addr, ETH_ALEN);
+        memcpy (eth->h_dest, zcfg->mac, ETH_ALEN);
+
+        /* Make canonical skb */
+        skb_reset_mac_header (skb);
+        skb_reset_network_header (skb);
+
+        pkt_len = sizeof (struct ttp_tsla_shim_hdr) + 2; /* control pkt */
+        tsh = NULL;
+        if (zcfg->ver == 4) {
+            skb->protocol = eth->h_proto = htons (ETH_P_IP);
+            tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_ipv4 (pkt, pkt_len, zcfg);
+            frame_len = ETH_HLEN + sizeof (struct iphdr) + pkt_len;
+        }
+        else if (zcfg->ver == 6) {
+            skb->protocol = eth->h_proto = htons (ETH_P_IPV6);
+            tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_ipv6 (pkt, pkt_len, zcfg);
+            frame_len = ETH_HLEN + sizeof (struct ipv6hdr) + pkt_len;
+        }
+        if (!tsh) {
+            kfree_skb (skb);
+            continue;
+        }
+
+        memset (tsh, 0, sizeof (*tsh));
+        memmove (tsh->src_node, mac, ETH_ALEN/2);
+        memmove (tsh->dst_node, &mac[3], ETH_ALEN/2);
+
+        tsh->length = htons (2); /* control pkt */
+        op = (u8 *)(tsh + 1);
+        op[0] = oc;
+        op[1] = ttp_myzn;
+        ttp_print_shim_hdr (tsh);
+
+        skb->dev = (struct net_device *)zcfg->dev; /* forward to gateway */
+        ttpip_pretty_print_data ("raw:", true, skb->dev->name, (u8 *)eth, skb->len, 0);
+        if (ttp_verbose > 0) {
+            TTP_DBG ("`<<- Tx packet: (gw-ctrl) len:%d dev:%s\n",
+                     skb->len, skb->dev->name);
+        }
+
+        skb_trim (skb, max (frame_len, TTP_MIN_FRAME_LEN));
+        skb_reset_network_header (skb);
+        skb_reset_mac_header (skb);
+        dev_queue_xmit (skb);
+    }
+}
+
+
+/* Decode shim header, validate ctrl-params, get [oc, zn] info from payload, and
+ * learn the mac-address (remote and gateway) into our mactbl - based on [oc, zn] */
+static void ttp_gw_ctl_recv (const char *mac, const struct ttp_tsla_shim_hdr *tsh)
+{
+    u8 *op;
+    int rv, zn;
+    enum ttp_mac_opcodes oc;
+
+    ttp_print_shim_hdr (tsh);
+    op = (u8 *)(tsh + 1);
+    oc = op[0]; /* ctrl pkt op-code */
+    zn = op[1]; /* remote gw zone */
+
+    if (!ttp_zone_valid (zn)) {
+        rv = ttp_mactbl_del (zn, mac, TTP_GW_CTL_OP_REMOTE_DEL);
+        if (rv && ttp_verbose > 0) {
+            TTP_DBG ("%s: Del %smac:%*phC from zone:%d\n", __FUNCTION__,
+                     oc == TTP_GW_CTL_OP_REMOTE_DEL ? "remote" : "gw", ETH_ALEN, mac, zn);
+        }
+        return;
+    }
+
+    switch ((oc)) {
+    case TTP_GW_CTL_OP_REMOTE_DEL:
+        rv = ttp_mactbl_del (zn, mac, TTP_GW_CTL_OP_REMOTE_DEL);
+        if (rv && ttp_verbose > 0) {
+            TTP_DBG ("%s: Del %smac:%*phC from zone:%d\n", __FUNCTION__,
+                     oc == TTP_GW_CTL_OP_REMOTE_DEL ? "remote" : "gw", ETH_ALEN, mac, zn);
+        }
+        break;
+    case TTP_GW_CTL_OP_REMOTE_ADD:
+    case TTP_GW_CTL_OP_GATEWAY_ADD:
+        if ((rv = ttp_mactbl_add (zn, mac, oc))) {
+            if (rv != EEXIST) {
+                TTP_LOG ("`-> Error: mac-table full (rv:%d)\n", rv);
             }
         }
+        if (ttp_verbose > 0) {
+            TTP_DBG ("%s: Add %smac:%*phC from zone:%d\n", __FUNCTION__,
+                     oc == TTP_GW_CTL_OP_REMOTE_ADD ? "" : "gw-", ETH_ALEN, mac, zn);
+        }
+        break;
+    default:
+        TTP_LOG ("%s: Invalid op(%d) mac:%*phC from zone %d\n",
+                 __FUNCTION__, oc, ETH_ALEN, mac, zn);
+        return;
     }
-    else { /* *opv == 0 */
-        TTP_DBG ("%s: Del mac: %*phC from zone %d\n", __FUNCTION__,
-                 ETH_ALEN, eth->h_dest, zn);
-        ttp_mactbl_del (zn, eth->h_dest);
+}
+
+
+static void ttp_nh_mac_tmr_cb (struct timer_list *tl)
+{
+    struct ttp_timer *tm;
+    int rv, to;
+
+    if (!(tm = from_timer (tm, tl, tmh))) {
+        return;
     }
+    if (tm->rst) {
+        tm->rst = false;
+        tm->try = 0;
+    }
+    if (tm->try >= tm->max) {
+        if (tm->try == tm->max) {
+            TTP_LOG ("Error: failed nh lookup (tm->try:%d); start slow scan\n", tm->try);
+        }
+        tm->try = tm->max + 1;
+        to = msecs_to_jiffies (ttp_gw_ctl_tmr.exp);
+        mod_timer (&ttp_nh_mac_tmr.tmh, jiffies + (to * 50)); /* 50x slower */
+    }
+    else if ((rv = ttp_all_nhmacs_get ()) < 0) {
+        TTP_LOG ("Error: route/neighbor lookup failed\n");
+        del_timer (&ttp_nh_mac_tmr.tmh);
+    }
+    else if (0 == rv) {
+        TTP_LOG ("%s: resolved all nh-macs\n", __FUNCTION__);
+        del_timer (&ttp_nh_mac_tmr.tmh);
+    }
+    else if (EAGAIN == rv) {
+        to = msecs_to_jiffies (ttp_gw_ctl_tmr.exp);
+        to *= (!tm->try++ ? 1 : 4); /* 2nd, 3rd,.. retry delayed 4x */
+        mod_timer (&ttp_nh_mac_tmr.tmh, jiffies + to);
+        TTP_LOG ("%s: re-try(#%d): nh-macs\n", __FUNCTION__, tm->try);
+    }
+}
+
+
+static void ttp_gw_ctl_tmr_cb (struct timer_list *tl)
+{
+    u8 *op;
+    struct ttp_timer *tm;
+    struct sk_buff *skb;
+    struct ethhdr *eth;
+    struct ttp_tsla_type_hdr *tth;
+    struct ttp_tsla_shim_hdr *tsh;
+    struct ttp_mactable *mct = NULL;
+
+    if (!(tm = from_timer (tm, tl, tmh))) {
+        return;
+    }
+    if (ttp_shutdown) {
+        TTP_LOG ("%s: skipping: ttp-gw is shutdown\n", __FUNCTION__);
+        goto end;
+    }
+    if (!(skb = ttpip_skb_aloc ())) {
+        TTP_LOG ("%s: out of memory\n", __FUNCTION__);
+        goto end;
+    }
+
+    /* Construct l2-mcast frame to adv my gw-mac to nodes within my zone */
+    eth = (struct ethhdr *)skb_mac_header (skb);
+    memcpy (eth->h_source, ttpip_etype_tsla.dev->dev_addr, ETH_ALEN);
+    ttpip_multicast_mac_create (eth->h_dest);
+    eth->h_proto = htons (TESLA_ETH_P_TTPOE);
+
+    tth = (struct ttp_tsla_type_hdr *)(eth + 1);
+    tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_tth ((u8 *)tth, 0);
+
+    memset (tsh, 0, sizeof (*tsh));
+    memmove (tsh->src_node, eth->h_source, ETH_ALEN/2);
+    memmove (tsh->dst_node, &eth->h_source[3], ETH_ALEN/2);
+
+    tsh->length = htons (2); /* control pkt */
+    op = (u8 *)(tsh + 1);
+    op[0] = TTP_GW_CTL_OP_NODE_ADD;
+    op[1] = ttp_myzn;
+    ttp_print_shim_hdr (tsh);
+
+    skb->dev = ttpip_etype_tsla.dev; /* forward frame to ttp-nodes within zone */
+    ttpip_pretty_print_data ("raw:", true, skb->dev->name, (u8 *)eth, skb->len, 0);
+    if (ttp_verbose > 0) {
+        TTP_DBG ("<<- Tx packet: (gw-mac-adv) len:%d dev:%s\n",
+                 skb->len, skb->dev->name);
+    }
+
+    skb_reset_network_header (skb);
+    skb_reset_mac_header (skb);
+    dev_queue_xmit (skb);
+
+    /* Walk mactbl, send node-macs learned / aged in my zone to remote gws */
+    while ((mct = ttp_mactbl_rbtree_get_next (mct))) {
+        if (!mct->vld || mct->prm) {
+            continue;
+        }
+        if (mct->age >= TTP_MAC_AGEOUT_OLD) {
+            if (!mct->rem) {
+                /* reached OLD threshold - withdraw local MAC */
+                ttp_gw_ctl_send (mct->mac, TTP_GW_CTL_OP_REMOTE_DEL);
+            }
+            if (mct->age >= TTP_MAC_AGEOUT_MAX) {
+                /* Reached Max threshold - we're not deleting local mac-entries,
+                 * Only invalidating the entry */
+                mct->vld = 0; /* Can resurrect later when mac-address seen agtain */
+                continue;
+            }
+        }
+        mct->age++;
+    }
+
+    /* Finally send my gw-mac to remote gws */
+    ttp_gw_ctl_send ((char *)ttpip_etype_tsla.dev->dev_addr, TTP_GW_CTL_OP_GATEWAY_ADD);
+
+end:
+    mod_timer (&ttp_gw_ctl_tmr.tmh, jiffies + msecs_to_jiffies (ttp_gw_ctl_tmr.exp));
 }
 
 
@@ -1201,21 +1555,25 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
                            struct packet_type *ptype, struct net_device *odev)
 {
     int zs = 0, zt = 0;
-    u16 frame_len, pkt_len;
+    u16 frame_len, pkt_len, rx_byt;
     struct ttp_tsla_type_hdr *tth;
     struct ttp_tsla_shim_hdr *tsh;
     struct ttp_intf_cfg *zcfg;
     struct ethhdr *eth, neth = {0};
-    struct ttp_mactable *mtbl;
+    struct ttp_mactable *mcs, *mct;
 
     if (ttp_shutdown) {
-        TTP_LOG ("%s: <<- Tx frame dropped: ttp-gw is shutdown\n", __FUNCTION__);
+        TTP_LOG ("%s: ->> Rx frame dropped: ttp-gw is shutdown\n", __FUNCTION__);
         goto end;
     }
+    if (skb->len > TTP_MAX_FRAME_LEN) {
+        goto end; /* drop silently */
+    }
 
+    rx_byt = skb->len; /* save rx-len to update stats once drop decisions are complete */
     eth = (struct ethhdr *)skb_mac_header (skb);
     if (!ether_addr_equal (ttpip_etype_tsla.dev->dev_addr, eth->h_dest)) {
-        goto end;
+        goto end; /* drop silently */
     }
     if (skb_headroom (skb) < TTP_IP_HEADROOM) {
         if (pskb_expand_head (skb, TTP_IP_HEADROOM, 0, GFP_ATOMIC)) {
@@ -1223,15 +1581,20 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
             goto end;
         }
     }
+    if (ttp_verbose > 0) {
+        TTP_DBG ("%s: ->> Rx frame: len:%d dev:%s\n", __FUNCTION__,
+                 skb->len, skb->dev->name);
+    }
 
-    TTP_DBG ("%s: ->> Rx frame: len:%d dev:%s\n", __FUNCTION__, skb->len, skb->dev->name);
-    ttpip_pretty_print_data ("raw:", 16, false, skb->dev->name, (u8 *)eth, skb->len);
+    ttpip_pretty_print_data ("raw:", false, skb->dev->name, (u8 *)eth, skb->len,
+                             (skb->len > TTP_MAX_FRAME_LEN) ? 96 : 0);
 
     tth = (struct ttp_tsla_type_hdr *)(eth + 1);
     ttp_print_tsla_type_hdr (tth);
 
     if (tth->tthl != TTP_PROTO_TTHL) {
-        TTP_LOG ("%s: Drop frame: Incorrect TTHL: (%d)\n", __FUNCTION__, tth->tthl);
+        TTP_LOG ("%s: Drop frame: Incorrect TTHL: (%d)\n", __FUNCTION__,
+                 tth->tthl);
         goto end;
     }
     if (!tth->l3gw) {
@@ -1247,45 +1610,36 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     ttp_mac_from_shim (neth.h_dest, tsh->dst_node);
     ttp_mac_from_shim (neth.h_source, tsh->src_node);
 
-    /* Shim dest-mac == my-mac => gw-mac-adv node-reply; local-mac learn */
-    if (ether_addr_equal (neth.h_dest, ttpip_etype_tsla.dev->dev_addr)) {
-        ttp_gw_local_mac_learn (&neth);
-        goto end; /* consume frame */
-    }
+    /* local-mac learn */
+    ttp_gw_local_mac_learn (eth->h_source);
 
-    /* Lookup src-mac addr in mactbl */
-    if ((mtbl = ttp_mactbl_find (neth.h_source))) {
+    if (!(mcs = ttp_mactbl_find (neth.h_source))) { /* Lookup src-mac */
+        goto end; /* drop silently */
+    }
+    if (!(zs = mcs->zon)) {
+        TTP_LOG ("%s: Drop frame: Invalid src-zone\n", __FUNCTION__);
+        goto end;
+    }
+    if (ttp_verbose > 0) {
         TTP_DBG ("%s: found src-mac:%*phC src-zone:%d\n", __FUNCTION__,
-                 ETH_ALEN, mtbl->mac, mtbl->zon);
-        if (!(zs = mtbl->zon)) {
-            TTP_LOG ("%s: Drop frame: Invalid src-zone\n", __FUNCTION__);
-            goto end;
-        }
+                 ETH_ALEN, mcs->mac, mcs->zon);
     }
-    else {
-        TTP_DBG ("%s: Error: Not found src-mac:%*phC in mactbl\n", __FUNCTION__,
-                 ETH_ALEN, neth.h_source);
+    if (!(mct = ttp_mactbl_find (neth.h_dest))) { /* Lookup dst-mac */
+        goto end; /* drop silently */
+    }
+    if (!(zt = mct->zon)) {
+        TTP_LOG ("%s: Drop frame: Invalid tgt-zone\n", __FUNCTION__);
         goto end;
     }
-    /* Lookup dst-mac addr in mactbl */
-    if ((mtbl = ttp_mactbl_find (neth.h_dest))) {
+    if (ttp_verbose > 0) {
         TTP_DBG ("%s: found dst-mac:%*phC tgt-zone:%d\n", __FUNCTION__,
-                 ETH_ALEN, mtbl->mac, mtbl->zon);
-        if (!(zt = mtbl->zon)) {
-            TTP_LOG ("%s: Drop frame: Invalid tgt-zone\n", __FUNCTION__);
-            goto end;
-        }
-    }
-    else {
-        TTP_DBG ("%s: Error: Not found dst-mac:%*phC in mactbl\n", __FUNCTION__,
-                 ETH_ALEN, neth.h_dest);
-        goto end;
+                 ETH_ALEN, mct->mac, mct->zon);
     }
     if (zs == zt) {
         TTP_LOG ("%s: Drop frame: src-zone == dst-zone(%d)\n", __FUNCTION__, zs);
         goto end;
     }
-    if (!(zcfg = ttp_intf_cfg_get (zt))) {
+    if (!(zcfg = ttp_zcfg (zt))) {
         TTP_LOG ("%s: Drop frame: error getting zone config from tgt-zone(%d)\n",
                  __FUNCTION__, zt);
         goto end;
@@ -1293,12 +1647,13 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     if (!is_valid_ether_addr (zcfg->mac)) {
         TTP_LOG ("`->Invalid gw-mac:%*pM, Drop frame: len:%d dev:%s\n",
                  ETH_ALEN, zcfg->mac, skb->len, skb->dev->name);
-        ttp_nhmac_get (zt); /* trigger arp, no timers are kicked off */
+        ttp_nhmac_get (zcfg); /* trigger arp, no timers are kicked off */
         goto end;
     }
-
-    TTP_DBG ("->> Ingress gw: ttp->ipv%d zn:%d->%d len:%d dev:%s\n",
-             zcfg->ver, zs, zt, skb->len, skb->dev->name);
+    if (ttp_verbose > 0) {
+        TTP_DBG ("->> Ingress gw: ttp->ipv%d zn:%d->%d len:%d dev:%s\n",
+                 zcfg->ver, zs, zt, skb->len, skb->dev->name);
+    }
 
     /* Make canonical skb */
     skb_reset_mac_header (skb);
@@ -1311,18 +1666,27 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     if (zcfg->ver == 4) {
         skb_push (skb, sizeof (struct iphdr)); /* add IPv4 header */
         skb->protocol = htons (ETH_P_IP);
-        tsh = ttp_prepare_ipv4 (skb->data, pkt_len, zcfg);
+        tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_ipv4 (skb->data, pkt_len, zcfg);
         frame_len = ETH_HLEN + sizeof (struct iphdr) + pkt_len;
     }
     else if (zcfg->ver == 6) {
         skb_push (skb, sizeof (struct ipv6hdr)); /* add IPv6 header */
         skb->protocol = htons (ETH_P_IPV6);
-        tsh = ttp_prepare_ipv6 (skb->data, pkt_len, zcfg);
+        tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_ipv6 (skb->data, pkt_len, zcfg);
         frame_len = ETH_HLEN + sizeof (struct ipv6hdr) + pkt_len;
     }
-    if (!tsh) {
-        goto end;
+    else {
+        BUG_ON (1);
     }
+    if (!tsh) { /* prepare_ippkt failed */
+        goto end; /* drop silently */
+    }
+
+    /* update stats */
+    mcs->r.frm++;
+    mcs->r.byt += rx_byt;
+    mct->t.frm++;
+    mct->t.byt += skb->len;
 
     skb_push (skb, ETH_HLEN); /* add ethernet header */
     eth = (struct ethhdr *)skb->data;
@@ -1330,10 +1694,12 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     memcpy (eth->h_dest, zcfg->mac, ETH_ALEN);
     eth->h_proto = skb->protocol;
 
-    ttpip_pretty_print_data ("raw:", 16, true, skb->dev->name, (u8 *)eth, skb->len);
-    TTP_DBG ("`<<- Tx packet: len:%d dev:%s\n", skb->len, skb->dev->name);
+    ttpip_pretty_print_data ("raw:", true, skb->dev->name, (u8 *)eth, skb->len, 0);
+    if (ttp_verbose > 0) {
+        TTP_DBG ("`<<- Tx packet: (ttp-gw) len:%d dev:%s\n", skb->len, skb->dev->name);
+    }
 
-    skb->dev = zcfg->dev;    /* forward to gateway */
+    skb->dev = (struct net_device *)zcfg->dev; /* forward to gateway */
     skb_trim (skb, max (frame_len, TTP_MIN_FRAME_LEN));
     skb_reset_network_header (skb);
     skb_reset_mac_header (skb);
@@ -1349,39 +1715,46 @@ end:
 static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
                            struct packet_type *ptype, struct net_device *odev)
 {
-    int tot_len, zs, zt, ver;
+    int zs, zt, ver;
+    u16 tot_len, rx_byt;
     struct iphdr *ipv4;
     struct ipv6hdr *ipv6;
     struct ttp_tsla_type_hdr *tth;
     struct ttp_tsla_shim_hdr *tsh;
     struct ethhdr *eth, neth = {0};
-    struct ttp_mactable *mtbl;
+    struct ttp_intf_cfg *myzcfg;
+    struct ttp_mactable *mcs, *mct;
 
     if (ttp_shutdown) {
         TTP_LOG ("%s: ->> Rx pkt dropped: ttp-gw is shutdown\n", __FUNCTION__);
         goto end;
     }
+    if (!(myzcfg = ttp_myzcfg ())) {
+        TTP_LOG ("%s: Error: my own zone lookup failed\n", __FUNCTION__);
+        goto end;
+    }
+    if (skb->len > TTP_MAX_FRAME_LEN) {
+        goto end; /* drop silently */
+    }
 
+    rx_byt = skb->len; /* save rx-len to update stats once drop decisions are complete */
     eth = (struct ethhdr *)skb_mac_header (skb);
     if (eth->h_proto == htons (ETH_P_IP)) {
         ver = 4;
         ipv4 = (struct iphdr *)skb_network_header (skb); /* skb_network_header */
-        if (ttp_zones[ttp_myzn].ip4.s_addr != ipv4->daddr ||
-            IPPROTO_TTP != ipv4->protocol) {
-            goto end;
+        if (IPPROTO_TTP != ipv4->protocol || ipv4->daddr != myzcfg->da4.s_addr) {
+            goto end; /* drop silently */
         }
     }
     else if (eth->h_proto == htons (ETH_P_IPV6)) {
         ver = 6;
         ipv6 = (struct ipv6hdr *)skb_network_header (skb);
-        if (ipv6_addr_cmp (&ipv6->daddr, &ttp_zones[ttp_myzn].ip6) ||
-            ipv6->nexthdr != IPPROTO_TTP) {
-            goto end;
+        if (IPPROTO_TTP != ipv6->nexthdr|| ipv6_addr_cmp (&ipv6->daddr, &myzcfg->da6)) {
+            goto end; /* drop silently */
         }
     }
     else {
-        TTP_LOG ("`->Error: Unknown IP version for gw - pkt dropped\n");
-        goto end;
+        goto end; /* drop silently */
     }
     if (skb_headroom (skb) < TTP_IP_HEADROOM) {
         if (pskb_expand_head (skb, TTP_IP_HEADROOM, 0, GFP_ATOMIC)) {
@@ -1389,9 +1762,13 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
             goto end;
         }
     }
+    if (ttp_verbose > 0) {
+        TTP_DBG ("%s: ->> Rx pkt: len:%d dev:%s\n", __FUNCTION__,
+                 skb->len, skb->dev->name);
+    }
 
-    TTP_DBG ("%s: ->> Rx pkt: len:%d dev:%s\n", __FUNCTION__, skb->len, skb->dev->name);
-    ttpip_pretty_print_data ("raw:", 16, false, skb->dev->name, (u8 *)eth, skb->len);
+    ttpip_pretty_print_data ("raw:", false, skb->dev->name, (u8 *)eth, skb->len,
+                             (skb->len > TTP_MAX_FRAME_LEN) ? 96 : 0);
 
     /* Make canonical skb */
     skb_reset_mac_header (skb);
@@ -1413,51 +1790,56 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
         skb_pull (skb, sizeof (struct ipv6hdr)); /* strip IPv6 header */
     }
     else {
-        goto end;
+        goto end; /* drop silently */
+    }
+
+    /* tsh length == 2 => control packet */
+    if (tsh->length == htons (2)) {
+        memmove (neth.h_dest, tsh->src_node, ETH_ALEN/2);
+        memmove (&neth.h_dest[3], tsh->dst_node, ETH_ALEN/2);
+        ttp_gw_ctl_recv (neth.h_dest, tsh);
+        goto end; /* consume packet */
     }
 
     /* Decode shim src/dst_node fields */
     ttp_mac_from_shim (neth.h_dest, tsh->dst_node);
     ttp_mac_from_shim (neth.h_source, tsh->src_node);
 
-    /* tsh length == 0 => mac learning packet */
-    if (tsh->length == 0) {
-        ttp_gw_control_handle (&neth, ver, ipv4, ipv6, tsh);
-        goto end; /* consume packet */
-    }
-
+    /* Prepare TTPoE frame to forward to destination ttp-node */
     skb_push (skb, sizeof (struct ttp_tsla_type_hdr)); /* add tesla-type header */
 
     tth = (struct ttp_tsla_type_hdr *)skb->data;
-    ttp_prepare_tth (tth, skb->len);
+    ttp_prepare_tth (skb->data, skb->len);
 
     ttp_print_eth_hdr (eth);
-    ttp_print_shim_hdr (tsh);
     ttp_print_tsla_type_hdr (tth);
+    ttp_print_shim_hdr (tsh);
 
-    /* Prepare TTPoE frame to forward to destination ttp-node */
     skb_push (skb, ETH_HLEN); /* add ethernet header */
     eth = (struct ethhdr *)skb->data;
     memcpy (eth->h_source, ttpip_etype_tsla.dev->dev_addr, ETH_ALEN);
     memcpy (eth->h_dest, neth.h_dest, ETH_ALEN);
     eth->h_proto = htons (TESLA_ETH_P_TTPOE);
 
-    skb_trim (skb, max ((u16)(ETH_HLEN + tot_len), TTP_MIN_FRAME_LEN));
+    skb_trim (skb, max ((u16)(tot_len + ETH_HLEN), TTP_MIN_FRAME_LEN));
     skb->len = max ((u16)skb->len, TTP_MIN_FRAME_LEN);
 
     /* Lookup src-mac addr in mactbl */
-    if ((mtbl = ttp_mactbl_find (neth.h_source))) {
-        TTP_DBG ("%s: found src-mac:%*phC zn:%d\n", __FUNCTION__,
-                 ETH_ALEN, mtbl->mac, mtbl->zon);
-        zs = mtbl->zon;
+    if ((mcs = ttp_mactbl_find (neth.h_source))) {
+        if (ttp_verbose > 0) {
+            TTP_DBG ("%s: found src-mac:%*phC zn:%d\n", __FUNCTION__,
+                     ETH_ALEN, mcs->mac, mcs->zon);
+        }
+        zs = mcs->zon;
     }
     /* Lookup dst-mac addr in mactbl */
-    if ((mtbl = ttp_mactbl_find (neth.h_dest))) {
-        TTP_DBG ("%s: found dst-mac:%*phC zn:%d\n", __FUNCTION__,
-                 ETH_ALEN, mtbl->mac, mtbl->zon);
-        zt = mtbl->zon;
+    if ((mct = ttp_mactbl_find (neth.h_dest))) {
+        if (ttp_verbose > 0) {
+            TTP_DBG ("%s: found dst-mac:%*phC zn:%d\n", __FUNCTION__,
+                     ETH_ALEN, mct->mac, mct->zon);
+        }
+        zt = mct->zon;
     }
-
     if (!zs || !zt) {
         TTP_LOG ("%s: Drop frame: Invalid src-node (%d) and/or dst-node (%d)\n",
                  __FUNCTION__, zs, zt);
@@ -1465,17 +1847,25 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
     }
     if (zs == zt) {
         TTP_LOG ("%s: Drop pkt: src-node and dst-node are in same zone (%d)\n",
-                 __FUNCTION__,
-                 zs);
+                 __FUNCTION__, zs);
         goto end;
     }
+    if (ttp_verbose > 0) {
+        TTP_DBG ("<<-- Egress gw: ttp<-ipv%d zn:%d<-%d len:%d dev:%s\n",
+                 ver, zt, zs, skb->len, skb->dev->name);
+    }
 
-    TTP_DBG ("<<-- Egress gw: ttp<-ipv%d zn:%d<-%d len:%d dev:%s\n",
-             ver, zt, zs, skb->len, skb->dev->name);
+    /* update stats */
+    mcs->r.frm++;
+    mcs->r.byt += rx_byt;
+    mct->t.frm++;
+    mct->t.byt += skb->len;
 
     skb->dev = ttpip_etype_tsla.dev; /* forward frame to ttp-nodes within zone */
-    ttpip_pretty_print_data ("raw:", 16, true, skb->dev->name, (u8 *)eth, skb->len);
-    TTP_DBG ("<<- Tx frame: len:%d dev:%s\n", skb->len, skb->dev->name);
+    ttpip_pretty_print_data ("raw:", true, skb->dev->name, (u8 *)eth, skb->len, 0);
+    if (ttp_verbose > 0) {
+        TTP_DBG ("<<- Tx frame: len:%d dev:%s\n", skb->len, skb->dev->name);
+    }
 
     skb_reset_network_header (skb);
     skb_reset_mac_header (skb);
@@ -1488,117 +1878,10 @@ end:
 }
 
 
-static void ttp_nh_mac_timer_cb (struct timer_list *tl)
-{
-    static int tries = 0;
-    const int max_tries = 5;
-    int rv, to = 200;
-
-    if (tries == max_tries) {
-        ttp_shutdown = 1;
-        TTP_LOG ("Error: route/arp lookup failed (%d retries)"
-                 " - ttpip-gw has shutdown\n", max_tries);
-    }
-    else if ((rv = ttp_all_nhmacs_get ()) < 0) {
-        TTP_LOG ("Error: route/neighbor lookup failed\n");
-        del_timer (&ttp_nh_mac_timer_head);
-    }
-    else if (0 == rv) {
-        TTP_DBG ("%s: resolved all nh-macs\n", __FUNCTION__);
-        del_timer (&ttp_nh_mac_timer_head);
-    }
-    else if (EAGAIN == rv) {
-        to *= (!tries++ ? 1 : 4); /* 2nd, 3rd,.. retry delayed 4x */
-        mod_timer (&ttp_nh_mac_timer_head, jiffies + to);
-        TTP_DBG ("%s: re-try(#%d): nh-macs\n", __FUNCTION__, tries);
-    }
-}
-
-
-static void ttp_gw_mac_adv_timer_cb (struct timer_list *tl)
-{
-    struct sk_buff *skb;
-    struct ethhdr *eth;
-    struct ttp_tsla_type_hdr *tth;
-    struct ttp_tsla_shim_hdr *tsh;
-    struct ttp_mactable *mct = NULL;
-    u8 *opv;
-
-    if (ttp_shutdown) {
-        TTP_LOG ("%s: skipping: ttp-gw is shutdown\n", __FUNCTION__);
-        goto end;
-    }
-
-    if (!(skb = ttpip_skb_aloc ())) {
-        TTP_LOG ("%s: out of memory\n", __FUNCTION__);
-        goto end;
-    }
-
-    /* Construct l2-mcast frame to adv my gw-mac to nodes within my zone */
-    eth = (struct ethhdr *)skb_mac_header (skb);
-    memcpy (eth->h_source, ttpip_etype_tsla.dev->dev_addr, ETH_ALEN);
-    memcpy (eth->h_dest, ttpip_etype_tsla.dev->dev_addr, ETH_ALEN);
-    eth->h_dest[0] |= 0x3; /* convert to multicast link-local mac address */
-    eth->h_proto = htons (TESLA_ETH_P_TTPOE);
-
-    tth = (struct ttp_tsla_type_hdr *)(eth + 1);
-    ttp_prepare_tth (tth, 0);
-
-    tsh = (struct ttp_tsla_shim_hdr *)(tth + 1);
-    memmove (tsh->src_node, &ttpip_etype_tsla.dev->dev_addr[3], ETH_ALEN/2);
-    memmove (tsh->dst_node, eth->h_dest, ETH_ALEN/2);
-    tsh->length = htons (26);
-
-    opv = (u8 *)(tsh + 1);
-    *opv = 2; /* OPEN_NACK */
-
-    skb->dev = ttpip_etype_tsla.dev; /* forward frame to ttp-nodes within zone */
-    ttpip_pretty_print_data ("raw:", 16, true, skb->dev->name, (u8 *)eth, skb->len);
-    TTP_DBG ("<<- Tx packet: gw-mac-adv frame: len:%d dev:%s\n", skb->len, skb->dev->name);
-
-    skb_reset_network_header (skb);
-    skb_reset_mac_header (skb);
-    dev_queue_xmit (skb);
-
-    /* Walk mactbl, send node-macs learned / aged in my zone to remote gws */
-    while ((mct = ttp_mactbl_rbtree_get_next (mct))) {
-        if (!mct->val || (mct->rem && !mct->gwf)) {
-            continue;
-        }
-        if (mct->age >= TTP_MAC_AGEOUT_OLD) {
-            if (!mct->rem) {
-                /* reached OLD threshold - withdraw local MAC */
-                ttp_mac_info_send_to_gws (mct->mac, TTP_REMOTE_DEL);
-            }
-
-            if (mct->age >= TTP_MAC_AGEOUT_MAX) {
-                /* reached Max threshold - remove this entry */
-                ttp_mactbl_del (mct->zon, mct->mac);
-                mct = NULL;     /* force restart loop */
-                continue;
-            }
-        }
-        mct->age++;
-    }
-
-    /* Finally send my gw-mac to remote gws */
-    ttp_mac_info_send_to_gws ((char *)ttpip_etype_tsla.dev->dev_addr, TTP_GATEWAY);
-
-end:
-    ttp_gw_mac_adv_timer_head.expires = jiffies + msecs_to_jiffies (TTP_GW_MAC_ADV_TMR);
-    add_timer (&ttp_gw_mac_adv_timer_head);
-}
-
-
 static int __init ttpip_init (void)
 {
-    u16 zn;
-    int rv, dv, in;
-    struct list_head *lhp;
-    struct net_device *dev;
-    struct in_ifaddr *ifa4;
-    struct inet6_ifaddr *ifa6;
-    struct ttp_intf_cfg *zcfg, *edev, *intf;
+    int rv;
+    struct ttp_intf_cfg *myzcfg;
 
 #if (TTP_TTH_MATCHES_IPH == 1)
     if (sizeof (struct ttp_tsla_type_hdr) != sizeof (struct iphdr)) {
@@ -1607,14 +1890,13 @@ static int __init ttpip_init (void)
         goto error;
     }
 #endif
-
     if (!ttp_num_gwips) {
         TTP_LOG ("Error: no gwips specified - unloading\n");
         rv = -ENODEV;
         goto error;
     }
     if (!ttp_dev || (!(ttpip_etype_tsla.dev = dev_get_by_name (&init_net, ttp_dev)))) {
-        TTP_LOG ("Error: Could not get dev (%s) - unloading\n", ttp_dev ?: "<unspecified>");
+        TTP_LOG ("Error: Not found dev(%s) - unloading\n", ttp_dev ?: "<unspecified>");
         rv = -ENODEV;
         goto error;
     }
@@ -1624,184 +1906,62 @@ static int __init ttpip_init (void)
         rv = -ENETDOWN;
         goto error;
     }
-    read_lock (&dev_base_lock);
-    rv = 0;
-    for (dev = first_net_device (&init_net); dev; dev = next_net_device (dev)) {
-        if (ttp_num_edevs >= (TTP_MAX_NUM_EDEVS - 1)) {
-            TTP_LOG ("Error: Exceeded size of interface list: %d/%d\n",
-                     ttp_num_edevs, TTP_MAX_NUM_EDEVS);
-            return -ENOSPC;
-        }
-        if (dev->flags & IFF_LOOPBACK) {
-            continue;
-        }
-        if (!(dev->flags & IFF_UP)) {
-            continue;
-        }
-        ttp_edevs[ttp_num_edevs++].dev = dev;
-    }
-    for (dv = 0, in = 0; dv < ttp_num_edevs; dv++) {
-        edev = &ttp_edevs[dv];
-        dev = edev->dev;
-        rcu_read_lock ();
-
-        /* Look for ipv4 address */
-        for (ifa4 = rcu_dereference (dev->ip_ptr->ifa_list);
-             ifa4; ifa4 = rcu_dereference(ifa4->ifa_next)) {
-
-            intf = &ttp_intfs[ttp_num_intfs++];
-            intf->dev = dev;
-            intf->ver = 4;
-            intf->ip4.s_addr = ifa4->ifa_address;
-            intf->pfl = ifa4->ifa_prefixlen;
-
-            TTP_DBG ("`->%s #%d ip4:%pI4/%d%s\n", dev->name, ttp_num_intfs,
-                     &ifa4->ifa_address, ifa4->ifa_prefixlen,
-                     !strncmp (dev->name, ttp_dev, 8) ? " (ttp-dev)" : "");
-
-            if (!strncmp (dev->name, ttp_dev, 8)) {
-                TTP_LOG ("`->Warning: ttp-dev:%s has IPv4 address\n", dev->name);
-                continue;
-            }
-            for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
-                zcfg = &ttp_zones[zn]; /* pick array entry (cannot use ttp_intf_cfg_get()) */
-                if (zcfg->ip4.s_addr == ifa4->ifa_address) {
-                    if (ttp_myzn) {
-                        TTP_LOG ("Error: zn:%d repeated zone (my_zone:%d)\n",
-                                 zn, ttp_myzn);
-                        rv = -EEXIST;
-                        break;
-                    }
-                    if (zcfg->dev) {
-                        TTP_LOG ("Error: zn:%d repeated ipv4 device: (dev:%s)\n",
-                                 zn, dev->name);
-                        rv = -EEXIST;
-                        break;
-                    }
-                    intf->zon = zn;
-                    ttp_myzn = zn;
-                    zcfg->zon = zn;
-                    ttpip_etype_lyr3.dev = zcfg->dev = dev;
-                    ttpip_etype_lyr3.type = htons (ETH_P_IP);
-                    memcpy (zcfg->mac, zcfg->dev->dev_addr, ETH_ALEN);
-                    zcfg->pfl = ifa4->ifa_prefixlen;
-                    TTP_DBG ("`->zone found: zn:%d dev:%s ip4:%pI4/%d\n",
-                             ttp_myzn, dev->name, &zcfg->ip4, zcfg->pfl);
-                }
-            }
-        }
-        rcu_read_unlock();
-        ifa6 = NULL;
-
-        /* Look for ipv6 address */
-        list_for_each (lhp, &dev->ip6_ptr->addr_list) {
-            if (!(ifa6 = list_entry (lhp, struct inet6_ifaddr, if_list))) {
-                break;
-            }
-            intf = &ttp_intfs[ttp_num_intfs++];
-            intf->dev = dev;
-            intf->ver = 6;
-            intf->ip6 = ifa6->addr;
-            intf->pfl = ifa6->prefix_len;
-            TTP_DBG ("`->%s #%d ip6:%pI6c/%d%s\n", dev->name, ttp_num_intfs,
-                     &ifa6->addr, ifa6->prefix_len,
-                     !strncmp (dev->name, ttp_dev, 8) ? " (ttp-dev)" : "");
-            if (!strncmp (dev->name, ttp_dev, 8)) {
-                if (!(ipv6_addr_type (&ifa6->addr) & IPV6_ADDR_LINKLOCAL)) {
-                    TTP_LOG ("`->Warning: ttp-dev:%s has IPv6 address\n", dev->name);
-                }
-                continue;
-            }
-            for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
-                zcfg = &ttp_zones[zn]; /* pick array entry (cannot use ttp_intf_cfg_get()) */
-                if (zcfg->ver == 6 && 0 == ipv6_addr_cmp (&zcfg->ip6, &ifa6->addr)) {
-                    if (ttp_myzn) {
-                        TTP_LOG ("Error: zn:%d repeated zone (my_zone:%d)\n",
-                                 zn, ttp_myzn);
-                        rv = -EINVAL;
-                        break;
-                    }
-                    if (zcfg->dev) {
-                        TTP_LOG ("Error: zn:%d repeated ipv6 device: (dev:%s)\n",
-                                 zn, dev->name);
-                        rv = -EEXIST;
-                        break;
-                    }
-                    intf->zon = zn;
-                    ttp_myzn = zn;
-                    zcfg->zon = zn;
-                    ttpip_etype_lyr3.dev = zcfg->dev = dev;
-                    ttpip_etype_lyr3.type = htons (ETH_P_IPV6);
-                    memcpy (zcfg->mac, zcfg->dev->dev_addr, ETH_ALEN);
-                    zcfg->pfl = ifa6->prefix_len;
-                    TTP_DBG ("`->zone found: zn:%d dev:%s ip6:%pI6c/%d\n",
-                             ttp_myzn, dev->name, &zcfg->ip6, zcfg->pfl);
-                }
-            }
-        }
-        if (!ifa4 && !ifa6) {
-            TTP_DBG ("`->none%s\n", !strncmp(dev->name, ttp_dev, 8)?" (ttp-dev)":"");
-        }
-    }
-    read_unlock (&dev_base_lock);
-
-    if (rv < 0) {
-        goto error;
-    }
-    if (!ttp_myzn) {
+    if (!ttp_zone_valid (ttp_myzn)) {
         TTP_LOG ("Error: zone: not known - unloading\n");
         rv = -EINVAL;
         goto error;
     }
-    if (!(zcfg = ttp_intf_cfg_get (ttp_myzn))) {
+    if (!(myzcfg = ttp_myzcfg ())) {
         TTP_LOG ("Error: No zone-config for my-zone(%d) - unloading\n", ttp_myzn);
         rv = -ENODEV;
         goto error;
     }
-    if (!zcfg->dev) {
+    if (!myzcfg->dev) {
         TTP_LOG ("Error: No layer3 interface for my-zone - unloading\n");
         rv = -ENODEV;
         goto error;
     }
-    if ((rv = ttp_all_nhmacs_get ()) < 0) {
-        TTP_LOG ("Error: resolve_nh_mac failed - unloading\n");
-        goto error;
+    if ((rv = ttp_mactbl_add (ttp_myzn, ttpip_etype_tsla.dev->dev_addr,
+                              TTP_GW_CTL_OP_GATEWAY_SLF))) {
+        if (rv != EEXIST) {
+            TTP_LOG ("`-> Error: mac-table full (rv:%d) - unloading\n", rv);
+            goto error;
+        }
     }
-    if (rv) {              /* to rv == EAGAIN from all_nhmacs_get */
-        timer_setup (&ttp_nh_mac_timer_head, &ttp_nh_mac_timer_cb, 0);
-        ttp_nh_mac_timer_head.expires = jiffies + 200;
-        add_timer (&ttp_nh_mac_timer_head);
-        TTP_DBG ("%s: re-try: nh-macs\n", __FUNCTION__);
-    }
-    TTP_DBG ("%s: ip%d-if:'%s' mac:%*pM\n"
-             "            ttp-if:'%s' mac:%*pM\n", __FUNCTION__, zcfg->ver,
-             zcfg->dev->name, ETH_ALEN, zcfg->dev->dev_addr,
+
+    TTP_LOG ("%s: ip%d-if:'%s' mac:%*pM\n"
+             "            ttp-if:'%s' mac:%*pM\n", __FUNCTION__, myzcfg->ver,
+             myzcfg->dev->name, ETH_ALEN, myzcfg->dev->dev_addr,
              ttpip_etype_tsla.dev->name, ETH_ALEN, ttpip_etype_tsla.dev->dev_addr);
 
-    timer_setup (&ttp_gw_mac_adv_timer_head, &ttp_gw_mac_adv_timer_cb, 0);
-    ttp_gw_mac_adv_timer_head.expires = jiffies + 10; /* start soon */
-    add_timer (&ttp_gw_mac_adv_timer_head);
+    /* initialize and start the timers */
+    timer_setup (&ttp_nh_mac_tmr.tmh, &ttp_nh_mac_tmr_cb, 0);
+    timer_setup (&ttp_gw_ctl_tmr.tmh, &ttp_gw_ctl_tmr_cb, 0);
 
-    mutex_init (&ttp_mactable_mutx);
+    mod_timer (&ttp_nh_mac_tmr.tmh, jiffies + msecs_to_jiffies (100));
+    mod_timer (&ttp_gw_ctl_tmr.tmh, jiffies + msecs_to_jiffies (100));
+
+    mutex_init (&ttp_mactbl_mutx);
+    mutex_init (&ttp_zoncfg_mutx);
 
     dev_add_pack (&ttpip_etype_tsla);
     dev_add_pack (&ttpip_etype_lyr3);
-    TTP_DBG ("------------------ Module modttpip.ko loaded -----------------+\n");
+    TTP_LOG ("------------------ Module modttpip.ko loaded -----------------+\n");
     ttp_shutdown = 0;           /* enable for business */
     return 0;
 error:
-    TTP_DBG ("~~~~~~~~~~~~~~~~ Module modttpip.ko not loaded ~~~~~~~~~~~~~~~+\n");
+    TTP_LOG ("~~~~~~~~~~~~~~~~ Module modttpip.ko not loaded ~~~~~~~~~~~~~~~+\n");
     return rv;
 }
 
 
 static void __exit ttpip_exit (void)
 {
-    del_timer (&ttp_gw_mac_adv_timer_head);
-    del_timer (&ttp_nh_mac_timer_head);
+    del_timer (&ttp_gw_ctl_tmr.tmh);
+    del_timer (&ttp_nh_mac_tmr.tmh);
     dev_remove_pack (&ttpip_etype_tsla);
     dev_remove_pack (&ttpip_etype_lyr3);
-    TTP_DBG ("~~~~~~~~~~~~~~~~~ Module modttpip.ko unloaded ~~~~~~~~~~~~~~~~+\n");
+    TTP_LOG ("~~~~~~~~~~~~~~~~~ Module modttpip.ko unloaded ~~~~~~~~~~~~~~~~+\n");
 }
 
 

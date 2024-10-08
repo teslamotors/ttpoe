@@ -106,8 +106,7 @@ int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_noc_host *tg)
 
     if (tg->mac[0] != Tesla_Mac_Oui0 || tg->mac[1] != Tesla_Mac_Oui1 ||
         tg->mac[2] != Tesla_Mac_Oui2) {
-        TTP_DBG ("%s: Error: Invalid mac-OUI: %*phC (expected %*phC)\n", __FUNCTION__,
-                 ETH_ALEN / 2, tg->mac, ETH_ALEN / 2, ttp_debug_source.mac);
+        /* don't create tag for target; it could be a gw-ctrl pkt */
         return -EADDRNOTAVAIL;
     }
 
@@ -174,15 +173,24 @@ int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, const int nl,
                         struct ttpoe_noc_host *tg)
 {
     int rv;
-    u64 kid;
+    u64 kid = 0;
     struct ttp_fsm_event *ev;
-    struct ttp_link_tag *lt;
+    struct ttp_link_tag clt = {0}, *lt = NULL;
 
     if (skb && !nl) {
         kfree_skb (skb);
         return -EINVAL;
     }
-
+    if (nl == 2) { /* control pkt */
+        if (ttp_verbose > 0) {
+            TTP_DBG ("%s: Control pkt target.vc: %*phC.%d gw:%d valid:%d len:%d\n",
+                     __FUNCTION__, ETH_ALEN, tg->mac, tg->vc, tg->gw, tg->ve, nl);
+        }
+        clt._rkid = kid;
+        clt.gwy = 1;
+        kid = clt._rkid;
+        goto force;
+    }
     if ((rv = ttpoe_noc_debug_tgt (&kid, tg))) {
         TTP_LOG ("%s: Error: Invalid target.vc: %*phC.%d gw:%d valid:%d\n",
                  __FUNCTION__, ETH_ALEN, tg->mac, tg->vc, tg->gw, tg->ve);
@@ -209,6 +217,7 @@ int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, const int nl,
         }
     }
 
+force:
     if (!ttp_evt_pget (&ev)) {
         return -ENOBUFS;
     }
@@ -237,7 +246,9 @@ int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, const int nl,
     TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_TX, TTP_OP__TTP_PAYLOAD);
 
     ttp_noc_enqu (ev);
-    ttp_noc_requ (lt);
+    if (lt) {
+        ttp_noc_requ (lt);
+    }
 
     return nl;
 }
