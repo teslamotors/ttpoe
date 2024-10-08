@@ -351,7 +351,7 @@ static int ttp_param_gwips_set (const char *val, const struct kernel_param *kp)
     /* Force re-initialization of zones */
     ttp_num_gwips = 0;
     memset (ttp_zones, 0, sizeof (ttp_zones));
-    TTP_LOG ("`->: Zeroed out %lu bytes: %lu ttp_zones\n", sizeof (struct ttp_intf_cfg),
+    TTP_LOG ("`->: Zeroed out %zu bytes: %zu ttp_zones\n", sizeof (struct ttp_intf_cfg),
              sizeof (ttp_zones) / sizeof (struct ttp_intf_cfg));
 
     for (zn = 1; zn < TTP_MAX_NUM_ZONES; zn++) {
