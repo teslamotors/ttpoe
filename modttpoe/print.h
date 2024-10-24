@@ -2,19 +2,21 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs directly
- *             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
- *             that establishes a TTP-peer connection with another instance of the same module
- *             running on another Linux machine on the same Layer-2 network. Since TTP runs
- *             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+ * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+ *             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+ *             Kernel Module that establishes a TTP-peer connection with another instance
+ *             of the same module running on another Linux machine on the same Layer-2
+ *             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+ *             Ethernet (TTPoE).
  *
- *             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
- *             designed to be implemented in Hardware as part of Tesla's DOJO project.
+ *             The Protocol is specified to work at high bandwidths over 100Gbps and is
+ *             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+ *             project.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *             This public release of the TTP software implementation is aligned with the
+ *             patent disclosure and public release of the main TTP Protocol
+ *             specification. Users of this software module must take into consideration
+ *             those disclosures in addition to the license agreement mentioned here.
  *
  * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
  *             Bill Chang <wichang@tesla.com>
@@ -26,23 +28,24 @@
  *
  * Version:    08/26/2022 wichang@tesla.com, "Initial version"
  *             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
- *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+ *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
  *             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
  *             09/29/2023 dntundlam@tesla.com, "final touches"
  *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  */
 
 #define TTPOE_PRBUF_MAX       1024
 #define TTP_SKB(bb,ll)  ttpoe_pretty_print_data ("skb: ", 16, (bb), (ll))
 #define TTP_RAW(bb,ll)  ttpoe_pretty_print_data ("raw: ", 16, (bb), (ll))
-#define TTP_RWS(bb,ll)  ttpoe_pretty_print_data ("raw: ", 16, (bb), ((ll) > 16 ? 16 : (ll)))
+#define TTP_RWS(bb,ll)  ttpoe_pretty_print_data ("raw: ", 16, (bb), ((ll)>16 ? 16:(ll)))
 
 extern char *ttp_opcode_names[];
 #define TTP_OPCODE_NAME(nm)                                 \
@@ -132,6 +135,12 @@ extern void ttpoe_pretty_print_data (const u8 *caption, const int bpl,
                                      const u8 *buf, const int buflen);
 extern void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_direction dir);
 
+static inline bool ttp_verbose_for_ctrl (int nl)
+{
+    /* higher verbose lvl for control pkt */
+    return ((ttp_verbose && nl != 2) || (ttp_verbose > 2 && nl == 2));
+}
+
 static inline void ttp_print_evt_hdr (struct seq_file *seq)
 {
     seq_printf (seq, "Tag V B VC  ------- event -------   len   rx-seq"
@@ -140,7 +149,7 @@ static inline void ttp_print_evt_hdr (struct seq_file *seq)
 static inline void ttp_print_tag_hdr (struct seq_file *seq)
 {
     seq_printf (seq, "Tag V B VC  ST  Q X Y    mac-addr gw   rx-seq"
-                "   tx-seq   ret-id   #opens   ------ kid -------\n");
+                "   tx-seq   ret-id   #op/nl   ------ kid -------\n");
 }
 
 

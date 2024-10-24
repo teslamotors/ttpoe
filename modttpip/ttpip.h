@@ -2,24 +2,26 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP-GW      A sample implementation of Tesla Transport Protocol Gateway (TTP-GW) that works with
- *             a network of Linux machines running the TTPoE kernel module and provides a way to
- *             allow islands of TTPoE in separate Layer-2 Ethernet networks to function seamlessly
- *             over an IPv4 network. This is work under development.
+ * TTP-GW   A sample implementation of Tesla Transport Protocol Gateway (TTP-GW) that
+ *          works with a network of Linux machines running the TTPoE kernel module and
+ *          provides a way to allow islands of TTPoE in separate Layer-2 Ethernet
+ *          networks to function seamlessly over an IPv4 network. This is work under
+ *          development.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *          This public release of the TTP software implementation is aligned with the
+ *          patent disclosure and public release of the main TTP Protocol specification.
+ *          Users of this software module must take into consideration those disclosures
+ *          in addition to the license agreement mentioned here.
  *
- * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
+ * Authors: Diwakar Tundlam <dntundlam@tesla.com>
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE.  See the GNU General Public License for more details.
  */
 
 #define TTP_MAX_NUM_NODES      256
@@ -58,7 +60,7 @@ enum ttp_mac_opcodes {
     TTP_GW_CTL_OP_LOCAL_ADD   = 0,
     TTP_GW_CTL_OP_LOCAL_DEL   = 1, /* unused: relies on aging */
 
-    TTP_GW_CTL_OP_NODE_ADD    = 2, /* map to opcode: OPEN_NACK */
+    TTP_GW_CTL_OP_NODE_ADD    = 2, /* unused: relies on node's reply to gw-mac-adv */
     TTP_GW_CTL_OP_NODE_DEL    = 3, /* unused: relies on aging */
 
     TTP_GW_CTL_OP_REMOTE_ADD  = 4,

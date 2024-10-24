@@ -2,19 +2,21 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs directly
- *             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
- *             that establishes a TTP-peer connection with another instance of the same module
- *             running on another Linux machine on the same Layer-2 network. Since TTP runs
- *             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+ * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+ *             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+ *             Kernel Module that establishes a TTP-peer connection with another instance
+ *             of the same module running on another Linux machine on the same Layer-2
+ *             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+ *             Ethernet (TTPoE).
  *
- *             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
- *             designed to be implemented in Hardware as part of Tesla's DOJO project.
+ *             The Protocol is specified to work at high bandwidths over 100Gbps and is
+ *             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+ *             project.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *             This public release of the TTP software implementation is aligned with the
+ *             patent disclosure and public release of the main TTP Protocol
+ *             specification. Users of this software module must take into consideration
+ *             those disclosures in addition to the license agreement mentioned here.
  *
  * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
  *             Bill Chang <wichang@tesla.com>
@@ -26,17 +28,18 @@
  *
  * Version:    08/26/2022 wichang@tesla.com, "Initial version"
  *             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
- *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+ *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
  *             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
  *             09/29/2023 dntundlam@tesla.com, "final touches"
  *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  */
 
 #define TTP_EVENTS_POOL_SIZE 1024 /* handle 2x512 tags */
@@ -146,16 +149,16 @@ extern struct ttp_link_tag_global ttp_global_root_head;
     })
 
 /* Trip-wire fence markers */
-#define TTP_EVENTS_FENCE_FREE_ELEM  TTP_EVENTS_STR_TO_FENCE("free") /* item is totally free */
-#define TTP_EVENTS_FENCE_POOL_ELEM  TTP_EVENTS_STR_TO_FENCE("pool") /* item in free pool */
-#define TTP_EVENTS_FENCE_TX_Q_ELEM  TTP_EVENTS_STR_TO_FENCE("tx_q") /* item in noc tx queue */
-#define TTP_EVENTS_FENCE_RX_Q_ELEM  TTP_EVENTS_STR_TO_FENCE("rx_q") /* item in event rx-queue */
-#define TTP_EVENTS_FENCE_AK_Q_ELEM  TTP_EVENTS_STR_TO_FENCE("ak_q") /* item in event ack-queue */
-#define TTP_EVENTS_FENCE_IN_Q_ELEM  TTP_EVENTS_STR_TO_FENCE("in_q") /* item in event int-queue */
-#define TTP_EVENTS_FENCE__NOC_ELEM  TTP_EVENTS_STR_TO_FENCE("_noc") /* item from noc interface */
-#define TTP_EVENTS_FENCE__CTL_ELEM  TTP_EVENTS_STR_TO_FENCE("_ctl") /* item from ctl interface */
-#define TTP_EVENTS_FENCE__DBG_ELEM  TTP_EVENTS_STR_TO_FENCE("_dbg") /* item from dbug interface*/
-#define TTP_EVENTS_FENCE_EXPT_ELEM  TTP_EVENTS_STR_TO_FENCE("expt") /* item for experimenting */
+#define TTP_EVENTS_FENCE_FREE_ELEM  TTP_EVENTS_STR_TO_FENCE("free") /* totally free */
+#define TTP_EVENTS_FENCE_POOL_ELEM  TTP_EVENTS_STR_TO_FENCE("pool") /* free pool */
+#define TTP_EVENTS_FENCE_TX_Q_ELEM  TTP_EVENTS_STR_TO_FENCE("tx_q") /* noc tx queue */
+#define TTP_EVENTS_FENCE_RX_Q_ELEM  TTP_EVENTS_STR_TO_FENCE("rx_q") /* event rx-queue */
+#define TTP_EVENTS_FENCE_AK_Q_ELEM  TTP_EVENTS_STR_TO_FENCE("ak_q") /* event ack-queue */
+#define TTP_EVENTS_FENCE_IN_Q_ELEM  TTP_EVENTS_STR_TO_FENCE("in_q") /* event int-queue */
+#define TTP_EVENTS_FENCE__NOC_ELEM  TTP_EVENTS_STR_TO_FENCE("_noc") /* noc interface */
+#define TTP_EVENTS_FENCE__CTL_ELEM  TTP_EVENTS_STR_TO_FENCE("_ctl") /* ctl interface */
+#define TTP_EVENTS_FENCE__DBG_ELEM  TTP_EVENTS_STR_TO_FENCE("_dbg") /* dbug interface*/
+#define TTP_EVENTS_FENCE_EXPT_ELEM  TTP_EVENTS_STR_TO_FENCE("expt") /* experimenting */
 
 #define TTP_TAG_TBL_SIZE     256
 #define TTP_TAG_TBL_BKTS_NUM 2
@@ -186,7 +189,7 @@ struct ttp_link_tag {
     u16                try;     /* tx-retry count */
 
     u8  valid;                  /* tag valid */
-    u8  state;                  /* 3b state[2:0] in HW (in SW use enum ttp_states_enum) */
+    u8  state;                  /* 3b state[2:0] in HW; in SW use enum ttp_states_enum */
 
     u8  retire_ptr;
     u8  current_ptr;
@@ -219,9 +222,10 @@ struct ttp_link_tag {
                     u8  _rs :1; /* reserved0 */
                     u8  rng :4; /* ring */
 
-                    u8  gwy :1; /* destimation reachable via gateway */
                     u8  bkt :1; /* hash bucket */
-                    u8  _y2 :6; /* reserved0 */
+                    u8  gw3 :1; /* destimation reachable via l3 gw */
+                    u8  tp4 :1; /* ttp over ipv4 */
+                    u8  _y2 :5; /* reserved0 */
 
                     u8  hvl;    /* hash value */
                 } __attribute__((packed));
@@ -297,18 +301,20 @@ extern ttp_fsm_fn ttp_fsm_entry_function[];
 
 extern void ttp_fsm_init (void);
 extern void ttp_fsm_exit (void);
-extern void ttp_gwmacadv (void);
-extern u64  ttp_tag_key_make (const u8 *mac, u8 vc, u8 gw);
+extern u64  ttp_tag_key_make (const u8 *mac, u8 vc, bool gw, bool t4);
 
 extern int  ttp_tag_add (u64 kid);
 extern void ttp_tag_reset (struct ttp_link_tag *lt);
 
-extern void ttp_fsm_evlog_add (const char *fl, const int ln, const char *fn, const int pos,
-                               struct ttp_fsm_event *qev, enum ttp_events_enum evn,
-                               enum ttp_opcodes_enum op, struct ttp_pkt_info *pif);
+extern void ttp_fsm_evlog_add (const char *fl, const int ln, const char *fn,
+                               const int pos, struct ttp_fsm_event *qev,
+                               enum ttp_events_enum evn, enum ttp_opcodes_enum op,
+                               struct ttp_pkt_info *pif);
 
-#define _TTP_EVLOG(ar...)      ttp_fsm_evlog_add(__FILE__,__LINE__,__FUNCTION__,__COUNTER__, ar)
-#define TTP_EVLOG(ev,en,op)   _TTP_EVLOG(ev, en, op, ev?&(((struct ttp_fsm_event *)ev)->psi):NULL)
+#define _TTP_EVLOG(ar...)      ttp_fsm_evlog_add (__FILE__, __LINE__, __FUNCTION__, \
+                                                  __COUNTER__, ar)
+#define  TTP_EVLOG(ev,en,op)  _TTP_EVLOG (ev, en, op, ev ? \
+                                          &(((struct ttp_fsm_event *)ev)->psi) : NULL)
 
 extern void ttp_noc_requ (struct ttp_link_tag *lt);
 extern int  ttp_noc_dequ (struct ttp_link_tag *lt);

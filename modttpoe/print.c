@@ -2,19 +2,21 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs directly
- *             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
- *             that establishes a TTP-peer connection with another instance of the same module
- *             running on another Linux machine on the same Layer-2 network. Since TTP runs
- *             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+ * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+ *             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+ *             Kernel Module that establishes a TTP-peer connection with another instance
+ *             of the same module running on another Linux machine on the same Layer-2
+ *             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+ *             Ethernet (TTPoE).
  *
- *             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
- *             designed to be implemented in Hardware as part of Tesla's DOJO project.
+ *             The Protocol is specified to work at high bandwidths over 100Gbps and is
+ *             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+ *             project.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *             This public release of the TTP software implementation is aligned with the
+ *             patent disclosure and public release of the main TTP Protocol
+ *             specification. Users of this software module must take into consideration
+ *             those disclosures in addition to the license agreement mentioned here.
  *
  * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
  *             Bill Chang <wichang@tesla.com>
@@ -26,29 +28,32 @@
  *
  * Version:    08/26/2022 wichang@tesla.com, "Initial version"
  *             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
- *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+ *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
  *             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
  *             09/29/2023 dntundlam@tesla.com, "final touches"
- *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"`
+ *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  */
 
 #ifndef __KERNEL__
 #define __KERNEL__
 #endif
 
+#include <linux/version.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/kernel.h>
 #include <linux/ip.h>
 #include <linux/module.h>
 #include <linux/seq_file.h>
+#include <net/addrconf.h>
 
 #include <ttp.h>
 
@@ -308,17 +313,19 @@ TTP_NOTRACE void ttp_print_evt_val (struct seq_file *seq, const struct ttp_fsm_e
 
     BUG_ON (!ev || (ev->rsk && ev->tsk));
 
-    seq_printf (seq, "%3d %1d %1d %2d %3d ->%-17s %4d   %6d   %6d   %6d   0x%016llx.%d  %s\n",
+    seq_printf (seq, "%3d %1d %1d %2d %3d ->%-17s%2d"
+                "   %6d   %6d   %6d   %6d   0x%016llx.%d  %s\n",
                 lt->hvl,
                 1,
                 lt->bkt,
                 lt->vci,
                 TTP_EVENTS_INDX_OF (ev),
                 TTP_EVENT_NAME (ev->evt),
-                ev->psi.noc_len,
+                lt->gw3 | (lt->tp4 << 1),
                 ev->psi.rxi_seq,
                 ev->psi.txi_seq,
                 lt->retire_id,
+                ev->psi.noc_len,
                 cpu_to_be64 (ev->kid),
                 ev->idx,
                 TTP_EVENTS_FENCE_TO_STR (ev->mrk));
@@ -332,8 +339,8 @@ TTP_NOTRACE void ttp_print_tag_val (struct seq_file *seq, const struct ttp_link_
         return;
     }
 
-    seq_printf (seq, "%3d %1d %1d %2d  %2s  %d %d %d    %02x:%02x:%02x %2d   %6d   %6d   %6d   %6d"
-                "   0x%016llx\n",
+    seq_printf (seq, "%3d %1d %1d %2d  %2s  %d %d %d    %02x:%02x:%02x %2d"
+                "   %6d   %6d   %6d   %6d   0x%016llx\n",
                 lt->hvl,
                 lt->valid,
                 lt->bkt,
@@ -343,7 +350,7 @@ TTP_NOTRACE void ttp_print_tag_val (struct seq_file *seq, const struct ttp_link_
                 lt->txt,
                 lt->try,
                 lt->mac[0], lt->mac[1], lt->mac[2],
-                lt->gwy,
+                lt->gw3 | (lt->tp4 << 1),
                 lt->rx_seq_id,
                 lt->tx_seq_id,
                 lt->retire_id,
@@ -363,8 +370,10 @@ TTP_NOTRACE void ttp_print_tag_val (struct seq_file *seq, const struct ttp_link_
 }
 
 
-TTP_NOTRACE void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_direction dir)
+TTP_NOTRACE
+void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_direction dir)
 {
+    u16 etype;
     struct ttp_frame_hdr frh;
     struct ttp_pkt_info  pif = {0};
 
@@ -372,22 +381,38 @@ TTP_NOTRACE void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_di
         return;
     }
 
-    ttp_skb_pars (skb, &frh, &pif);
+    etype = ttp_skb_pars (skb, &frh, &pif);
 
     TTP_VBG ("+---- Parse %s frame: (skb-len: %d) (noc-len: %d) ---+\n",
              TTP_RX == dir ? ">>>> RXQ" : "<<<< TXQ", skb->len, pif.noc_len);
 
     TTP_RAW ((u8 *)skb->data, skb->len);
 
-    ttp_print_eth_hdr       (frh.eth);
-    ttp_print_tsla_type_hdr (frh.tth);
-    ttp_print_shim_hdr      (frh.tsh);
+    ttp_print_eth_hdr (frh.eth);
+
+    switch (etype) {
+    case TESLA_ETH_P_TTPOE:
+        ttp_print_tsla_type_hdr (frh.tth);
+        ttp_print_shim_hdr (frh.tsh);
+        break;
+    case ETH_P_IP:
+        ttp_print_ipv4_hdr (frh.ip4);
+        ttp_print_shim_hdr (frh.tsh);
+        break;
+    case ETH_P_IPV6:
+        ttp_print_ipv6_hdr (frh.ip6);
+        ttp_print_shim_hdr (frh.tsh);
+        break;
+    default:
+        return;
+    }
 
     TTP_VBG ("Conn: opcode: %1d [ %s ]\n",
              frh.ttp->conn_opcode, TTP_OPCODE_NAME (frh.ttp->conn_opcode));
 
     TTP_VBG ("Conn:     vc: %-2d  tx: %-2d  rx: %-2d     epoch: %-2d\n",
-             frh.ttp->conn_vc, frh.ttp->conn_tx, frh.ttp->conn_rx, ntohs (frh.ttp->conn_epoch));
+             frh.ttp->conn_vc, frh.ttp->conn_tx, frh.ttp->conn_rx,
+             ntohs (frh.ttp->conn_epoch));
 
     TTP_VBG ("Conn:  congn: %-2d    reserved: %*phC   extn: %-2d\n",
              frh.ttp->conn_congestion,
@@ -398,52 +423,11 @@ TTP_NOTRACE void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_di
              ntohl (frh.ttp->conn_tx_seq), ntohl (frh.ttp->conn_rx_seq));
 
     if (pif.noc_len) {
-        TTP_VBG (" NOC: tot-len: %zu\n", min ((size_t)pif.noc_len,
-                                              sizeof (struct ttp_ttpoe_noc_hdr)));
-        TTP_RAW ((u8 *)frh.noc, min ((size_t)pif.noc_len, sizeof (struct ttp_ttpoe_noc_hdr)));
+        TTP_VBG (" NOC: tot-len: %zu\n", min ((size_t)pif.noc_len, sizeof (*frh.noc)));
+        TTP_RAW ((u8 *)frh.noc, min ((size_t)pif.noc_len, sizeof (*frh.noc)));
     }
-
-    if (pif.noc_len > sizeof (struct ttp_ttpoe_noc_hdr)) {
+    if (pif.noc_len > sizeof (*frh.noc)) {
         TTP_VBG (" NOC: data-len: %d\n", pif.noc_len);
-        TTP_RWS ((u8 *)frh.dat, pif.noc_len - sizeof (struct ttp_ttpoe_noc_hdr));
+        TTP_RWS ((u8 *)frh.dat, pif.noc_len - sizeof (*frh.noc));
     }
-
-#if 0 /* not enabled */
-    TTP_VBG ("transport data hdr1: 0x%016llx\n", be64_to_cpu ((frh.noc)->xhdr1_u64));
-    TTP_VBG ("transport data hdr2: 0x%016llx\n", be64_to_cpu ((frh.noc)->xhdr2_u64));
-
-    switch (frh.noc->xhdr1_fmt.type) {
-    case TTP_ET__BASE:
-        TTP_VBG (    "extn: type: 0x%02x (base / protocol / explicit addr)\n",
-                     frh.noc->xhdr1_fmt.type);
-        break;
-    case TTP_ET__FEATURE_NEG_0 ... TTP_ET__FEATURE_NEG_N:
-        TTP_VBG (    "extn: type: 0x%02x (feature neg[%d])\n", frh.noc->xhdr1_fmt.type,
-                     frh.noc->xhdr1_fmt.type - TTP_ET__FEATURE_NEG_0);
-        break;
-    case TTP_ET__SEL_ACK:
-        TTP_VBG (    "extn: type: 0x%02x (selective ack)\n", frh.noc->xhdr1_fmt.type);
-        break;
-    case TTP_ET__PAYLOAD_MOD:
-        TTP_VBG (    "extn: type: 0x%02x (payload mod)\n", frh.noc->xhdr1_fmt.type);
-        break;
-    case TTP_ET__PAYLOAD_OFFSET:
-        TTP_VBG (    "extn: type: 0x%02x (payload offset)\n", frh.noc->xhdr1_fmt.type);
-        break;
-    case TTP_ET__PAYLOAD_HEADER_0 ... TTP_ET__PAYLOAD_HEADER_N:
-        TTP_VBG (    "extn: type: 0x%02x (payload header[%d])\n", frh.noc->xhdr1_fmt.type,
-                     frh.noc->xhdr1_fmt.type - TTP_ET__PAYLOAD_HEADER_0);
-        break;
-    case TTP_ET__FCS_0 ... TTP_ET__FCS_N:
-        TTP_VBG (    "extn: type: 0x%02x (FCS[%d])\n", frh.noc->xhdr1_fmt.type,
-                     frh.noc->xhdr1_fmt.type - TTP_ET__FCS_0);
-        break;
-    case TTP_ET__PADDING:
-        TTP_VBG (    "extn: type: 0x%02x (padding)\n", frh.noc->xhdr1_fmt.type);
-        break;
-    default:
-        TTP_VBG (    "extn: type: 0x%02x (unknown)\n", frh.noc->xhdr1_fmt.type);
-        break;
-    }
-#endif
 }

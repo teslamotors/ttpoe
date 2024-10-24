@@ -2,19 +2,21 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs directly
- *             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
- *             that establishes a TTP-peer connection with another instance of the same module
- *             running on another Linux machine on the same Layer-2 network. Since TTP runs
- *             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+ * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+ *             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+ *             Kernel Module that establishes a TTP-peer connection with another instance
+ *             of the same module running on another Linux machine on the same Layer-2
+ *             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+ *             Ethernet (TTPoE).
  *
- *             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
- *             designed to be implemented in Hardware as part of Tesla's DOJO project.
+ *             The Protocol is specified to work at high bandwidths over 100Gbps and is
+ *             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+ *             project.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *             This public release of the TTP software implementation is aligned with the
+ *             patent disclosure and public release of the main TTP Protocol
+ *             specification. Users of this software module must take into consideration
+ *             those disclosures in addition to the license agreement mentioned here.
  *
  * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
  *             Bill Chang <wichang@tesla.com>
@@ -26,27 +28,36 @@
  *
  * Version:    08/26/2022 wichang@tesla.com, "Initial version"
  *             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
- *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+ *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
  *             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
  *             09/29/2023 dntundlam@tesla.com, "final touches"
  *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  */
 
-#define TTP_NOC_BUF_SIZE  (1024) /* Size of full NOC buffer, including NOC Header and NOC Data */
+#define TESLA_TTP_OVER_IPV4   1  /* if 1: 'ttp-o-ipv4'; always: 'ttp-o-ethernet' */
+
+extern u32 ttp_prefix;
+extern int ttp_encap_ipv4;
+extern u8  ttp_gwmac[ETH_ALEN];
+
+#define TTP_NOC_BUF_SIZE  (1024) /* Size of NOC buffer, including NOC Header + Data */
 #define TTP_NOC_DAT_SIZE  (TTP_NOC_BUF_SIZE - sizeof (struct ttp_ttpoe_noc_hdr))
 #define TTP_NOC_NUM_64B   (TTP_NOC_DAT_SIZE / sizeof (u64))
 
+extern struct packet_type ttpoe_etype_tesla;
+extern struct packet_type ttpoe_etype_ipv4;
 
 enum ttp_frame_direction {
-    TTP_RX,                     /* 0 */
-    TTP_TX,                     /* 1 */
+    TTP_RX = 0,
+    TTP_TX,
 };
 
 /* Transport Header (TTP) that follows TSH
@@ -87,7 +98,8 @@ struct ttp_transport_hdr {
 } __attribute__((packed));
 
 
-#define TTP_HEADERS_LEN  (sizeof (struct ttp_tsla_shim_hdr) + sizeof (struct ttp_transport_hdr))
+#define TTP_HEADERS_LEN  (sizeof (struct ttp_tsla_shim_hdr) + \
+                          sizeof (struct ttp_transport_hdr))
 #define TTP_TTH_HDR_LEN  (sizeof (struct ttp_tsla_type_hdr) + TTP_HEADERS_LEN)
 
 
@@ -161,29 +173,31 @@ struct ttp_ttpoe_noc_dat {
 
 
 struct ttp_frame_hdr {
-    struct ethhdr            *eth;
-    struct ttp_tsla_type_hdr *tth;
-    struct ttp_tsla_shim_hdr *tsh;
-    struct ttp_transport_hdr *ttp;
-    struct ttp_ttpoe_noc_hdr *noc;
-    struct ttp_ttpoe_noc_dat *dat;
+    struct ethhdr                  *eth;
+    union {                        
+        struct ttp_tsla_type_hdr   *tth;
+        struct iphdr               *ip4;
+        struct ipv6hdr             *ip6;
+    };                             
+    struct ttp_tsla_shim_hdr       *tsh;
+    struct ttp_transport_hdr       *ttp;
+    struct ttp_ttpoe_noc_hdr       *noc;
+    struct ttp_ttpoe_noc_dat       *dat;
 } __attribute__((packed));
 
 
 struct ttp_pkt_info {
-    u16 noc_len;                /* max value: TTP_NOC_BUF_SIZE */
+    u8 *skb_dat;  /* saved skb->data */
+    u16 skb_len;  /* saved skb->len */
+    u16 noc_len;  /* max value: TTP_NOC_BUF_SIZE */
 
-    u32 rxi_seq;
-    u32 txi_seq;
-
-    u16 tth_off;
     u16 tsh_off;
     u16 ttp_off;
     u16 noc_off;
     u16 dat_off;
 
-    u8 *skb_dat;                /* saved skb->data */
-    u16 skb_len;                /* saved skb->len */
+    u32 rxi_seq;
+    u32 txi_seq;
 } __attribute__((packed));
 
 
@@ -191,24 +205,16 @@ struct ttp_fsm_event;
 enum   ttp_opcodes_enum;
 
 #ifdef __KERNEL__
-extern bool ttp_random_flip (int pct);
-
+extern bool ttp_rnd_flip (int pct);
 extern void ttp_skb_drop (struct sk_buff *skb);
 extern void ttp_skb_xmit (struct sk_buff *skb);
-
 extern void ttp_tsk_bind (struct ttp_fsm_event *ev, const struct ttp_fsm_event *qev);
-
 extern u8  *ttp_skb_aloc (struct sk_buff **skbp, const int nl);
-extern u8  *ttp_skb_prep (struct sk_buff **skbp, struct ttp_fsm_event *qev,
+extern bool ttp_skb_prep (struct sk_buff **skbp, struct ttp_fsm_event *qev,
                           enum ttp_opcodes_enum op);
-
-extern void ttp_skb_pars (const struct sk_buff *skb, struct ttp_frame_hdr *fh,
+extern u16  ttp_skb_pars (const struct sk_buff *skb, struct ttp_frame_hdr *fh,
                           struct ttp_pkt_info *pf);
-extern bool ttp_skb_pars_get_gw_flag (const struct sk_buff *skb);
-
-extern int  ttp_skb_chek (const struct sk_buff *skb);
 extern int  ttp_skb_enqu (struct sk_buff *skb);
-
 extern int  ttp_skb_dequ (void);
 
 extern int  __init ttpoe_proc_init (void);

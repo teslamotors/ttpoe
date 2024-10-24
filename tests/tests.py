@@ -1,9 +1,36 @@
 #!/usr/bin/python3
 
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Copyright (c) 2023 Tesla Inc. All rights reserved.
+#
+# TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+#             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+#             Kernel Module that establishes a TTP-peer connection with another instance
+#             of the same module running on another Linux machine on the same Layer-2
+#             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+#             Ethernet (TTPoE). This is a test script.
+#
+#             This public release of the TTP software implementation is aligned with the
+#             patent disclosure and public release of the main TTP Protocol
+#             specification. Users of this software module must take into consideration
+#             those disclosures in addition to the license agreement mentioned here.
+#
+# Authors:    Diwakar Tundlam <dntundlam@tesla.com>
+#
+# This software is licensed under the terms of the GNU General Public License version 2
+# as published by the Free Software Foundation, and may be copied, distributed, and
+# modified under those terms.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+# PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
 import os
 import sys
 import stat
 import time
+import json
 import socket
 import argparse
 import unittest
@@ -24,12 +51,16 @@ peerLock = ""
 verbose  = 0
 connVCI  = "0"
 tagSeqi  = "0"
+gwmac    = ""
 
 modpath  = "/sys/module/modttpoe/parameters"
 procpath = "/proc/net/modttpoe"
 
-def getDev (nn):
-    return "vl100"
+def getDefaultEthDev():
+    return "vleth"
+
+def getDefaultIP4Dev():
+    return "vlip4"
 
 def selfHostname():
     return subprocess.run (['uname', '-n'],
@@ -58,6 +89,7 @@ def setUpModule():
     global verbose
     global connVCI
     global tagSeqi
+    global gwmac
 
     if "-vv" in sys.argv[1:] or "--vverbose" in sys.argv[1:]:
         verbose = 2
@@ -69,17 +101,24 @@ def setUpModule():
     if verbose:
         print (f"v---------------------------------------v")
         print (f" Start tests: {datetime.now()}")
-    if (options.self_dev):
+        print (f"     Verbose: {verbose}")
+    if options.self_dev:
         selfDev = options.self_dev
         if verbose:
             print (f"     SelfDev: {selfDev} (override)")
+    elif options.ipv4:
+        selfDev = getDefaultIP4Dev()
     else:
-        selfDev = getDev (selfHost)
-        if verbose == 2:
-            print (f"     selfDev: {selfDev} (default)")
+        selfDev = getDefaultEthDev()
+    if verbose:
+        print (f"     selfDev: {selfDev} (default)")
 
     if (not options.target):
         print (f"Error: Missing --target")
+        sys.exit (-1)
+
+    if options.ipv4 and options.use_gw:
+        print (f"Error: Cannot combine option '--use-gw' with '--ipv4' option")
         sys.exit (-1)
 
     if (options.vci):
@@ -89,22 +128,17 @@ def setUpModule():
         print (f"Error: Invalid vci {connVCI}")
         sys.exit (-1)
 
-    cmd = (f"ip link show dev {selfDev}")
+    cmd = (f"ip -j link show dev {selfDev}")
     out = subprocess.run (str.split (cmd), stdout=subprocess.PIPE)
     if (out.returncode):
         print (f"Error: {cmd} failed")
         sys.exit (-1)
-
-    selfMac = str(out.stdout.split()[-3], encoding='utf-8')
-    rarg = selfMac.split(':')
-    if ((rarg[-6] != "98") and (rarg[-5] != "ed") and (rarg[-4] != "5c")):
+    selfMac = json.loads (str(out.stdout, encoding='utf-8'))[0]["address"]
+    jstr = selfMac.split(':')
+    if ((jstr[-6] != "98") and (jstr[-5] != "ed") and (jstr[-4] != "5c")):
         print (f"Error: '{selfDev}' is not a TTP device: {selfMac}")
         sys.exit (-1)
-
-    selfMacA = f"{rarg[-3]}{rarg[-2]}{rarg[-1]}"
-
-#    print (f"{selfMacA} <- selfMacA")
-#    sys.exit (-1)
+    selfMacA = f"{jstr[-3]}{jstr[-2]}{jstr[-1]}"
 
     targ = options.target.split(':')
     if (len(targ) == 1):
@@ -147,7 +181,7 @@ def setUpModule():
         if ("character special (446/0)" not in po):
             os.system (f"ls -al /dev/noc_debug")
             print (f"Error: 'self' /dev/noc_debug not 'char' dev (446/0)\n"
-                   "HINT: '/dev/noc_debug' may be a plain text file - remove it.")
+                   "HINT: '/dev/noc_debug' may be a plain text file - remove it")
             sys.exit (-1)
 
     if peerHost:
@@ -159,7 +193,7 @@ def setUpModule():
             if ("character special (446/0)" not in po):
                 os.system (f"ssh {peerHost} 'ls -al /dev/noc_debug'")
                 print (f"Error: 'peer' /dev/noc_debug not 'char' dev (446/0)\n"
-                       "HINT: '/dev/noc_debug' may be a plain text file - remove it.")
+                       "HINT: '/dev/noc_debug' may be a plain text file - remove it")
                 sys.exit (-1)
 
     selfLock = f"/mnt/mac/.locks/ttp-host-lock-{selfHost}"
@@ -182,7 +216,6 @@ def setUpModule():
         print (f"   Self Host: {selfHost}")
         print (f"    MAC addr: {selfMac}")
         print (f"   Peer Host: {peerHost}")
-        print (f" Use Gateway: {options.use_gw}")
         print (f"  L MAC addr: {macUpper}:{peerMacL}")
         print (f"  A MAC addr: {macUpper}:{peerMacA}")
         if options.vci:
@@ -190,16 +223,17 @@ def setUpModule():
         else:
             if verbose == 2:
                 print (f"    Conn VCI: 0 (default)")
-        print (f"     Verbose: {verbose}")
 
     if (options.peer_dev):
         peerDev = options.peer_dev
         if verbose:
             print (f"     PeerDev: {peerDev} (override)")
+    elif options.ipv4:
+        peerDev = getDefaultIP4Dev()
     else:
-        peerDev = getDev (options.target)
-        if verbose == 2:
-            print (f"     PeerDev: {peerDev} (default)")
+        peerDev = getDefaultEthDev()
+    if verbose:
+        print (f"     PeerDev: {peerDev} (default)")
 
     if peerHost:
         rv = os.system (f"ssh {peerHost} 'ifconfig {peerDev} 1>/dev/null'")
@@ -219,6 +253,24 @@ def setUpModule():
             os.remove (selfLock)
             os.remove (peerLock)
             sys.exit (-1)
+
+        if options.ipv4:
+            os.system (f"echo 1 | sudo tee {modpath}/encap 1>/dev/null")
+            os.system (f"echo 10 | sudo tee {modpath}/prefix 1>/dev/null")
+        if verbose:
+            print (f"  IPv4 Encap: {options.ipv4}")
+            pf = open (f"/sys/module/modttpoe/parameters/encap", "r")
+            pfo = int (pf.read().strip())
+            pf.close()
+            if pfo:
+                print (f"   TTP Encap: ipv4 (etype: 0x0800)")
+            else:
+                print (f"   TTP Encap: ttpoe (etype: 0x9ac6)")
+            pf = open (f"/sys/module/modttpoe/parameters/prefix", "r")
+            pfo = pf.read().strip()
+            pf.close()
+            print (f" IPv4 Prefix: {pfo}")
+
         # set vc (first) and target on 'self'
         if options.vci:
             rv = os.system (f"echo {connVCI} |"
@@ -228,14 +280,16 @@ def setUpModule():
                 tearDownModule()
                 sys.exit (-1)
 
+        if verbose and not options.ipv4:
+            print (f" Use Gateway: {options.use_gw}")
         lct = 10
         while (options.use_gw and lct):
             pf = open (f"/sys/module/modttpoe/parameters/gwmac", "r")
-            pfo = pf.read().strip()
+            gwmac = pf.read().strip()
             pf.close()
             if verbose == 2:
-                print (f" GW MAC addr: {pfo}")
-            if pfo == "00:00:00:00:00:00":
+                print (f"?GW MAC addr: {gwmac}")
+            if gwmac == "00:00:00:00:00:00":
                 time.sleep (1)
                 lct = lct - 1
                 continue
@@ -252,6 +306,14 @@ def setUpModule():
             print (f"Error: Detect gateway on 'self' failed")
             tearDownModule()
             sys.exit (-1)
+        if verbose:
+            pf = open (f"/sys/module/modttpoe/parameters/gwmac", "r")
+            gwmac = pf.read().strip()
+            pf.close()
+            if options.use_gw:
+                print (f" GW MAC addr: {gwmac}")
+            elif options.ipv4:
+                print (f" IPv4 nh MAC: <dynamic-neigh-lookup>")
 
         rv = os.system (f"echo {peerMacA} |"
                         f" sudo tee {modpath}/target 1>/dev/null")
@@ -286,6 +348,11 @@ def setUpModule():
             time.sleep (2) # to allow for gw-mac resolve on peer and remote-mac-adv
         else:
             time.sleep (0.5) # to allow peer module to settle down
+        if options.ipv4:
+            os.system (f"ssh {peerHost} 'echo 1 |"
+                       f" sudo tee {modpath}/encap 1>/dev/null'")
+            os.system (f"ssh {peerHost} 'echo 10 |"
+                       f" sudo tee {modpath}/prefix 1>/dev/null'")
 
     # to test setting peer target.vci in setup-module (change 0 --> 1 to enable)
     if (0):
@@ -316,7 +383,7 @@ def setUpModule():
 def tearDownModule():
     if verbose == 2:
         print (f"**** Waiting 10 sec before tear-down:-\n"
-               f" Hit ^C to stop and examine state before modules are unloaded.")
+               f" Hit ^C to stop and examine state before modules are unloaded")
         time.sleep (10)
 
     if (options.no_unload):
@@ -727,6 +794,9 @@ class Test2_Packet (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test5_get_clos (self):
+        if options.ipv4:
+            self.skipTest (f"--ipv4 specified")
+
         if (options.no_packet):
             self.skipTest (f"--no-packet specified")
 
@@ -768,6 +838,9 @@ class Test2_Packet (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test6_snd_clos (self):
+        if options.ipv4:
+            self.skipTest (f"--ipv4 specified")
+
         if (options.no_packet):
             self.skipTest (f"--no-packet specified")
 
@@ -971,17 +1044,18 @@ class Test5_Cleanup (unittest.TestCase):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser (add_help=False)
-    parser.add_argument ('--self-dev')                        # [--self-dev=<dev>]
-    parser.add_argument ('--peer-dev')                        # [--peer-dev=<dev>]
-    parser.add_argument ('--vci')                             # [--vci=<vc>]
-    parser.add_argument ('--target')                          # [--target=<NN>]
-    parser.add_argument ('--use-gw', action='store_true')     # [--use-gw]
-    parser.add_argument ('--no-unload', action='store_true')  # [--no-unload]
-    parser.add_argument ('--no-load', action='store_true')    # [--no-load]
-    parser.add_argument ('--no-traffic', action='store_true') # [--no-traffic]
-    parser.add_argument ('--traffic')                         # [--traffic=<NN>]
-    parser.add_argument ('--no-packet', action='store_true')  # [--no-packet]
-    parser.add_argument ('--no-remote', action='store_true')  # [--no-remote]
+    parser.add_argument ('--self-dev')                         # [--self-dev=<dev>]
+    parser.add_argument ('--peer-dev')                         # [--peer-dev=<dev>]
+    parser.add_argument ('--vci')                              # [--vci=<vc>]
+    parser.add_argument ('--use-gw',     action='store_true')  # [--use-gw]
+    parser.add_argument ('--ipv4',       action='store_true')  # [--ipv4]
+    parser.add_argument ('--target')                           # [--target=<NN>]
+    parser.add_argument ('--no-unload',  action='store_true')  # [--no-unload]
+    parser.add_argument ('--no-load',    action='store_true')  # [--no-load]
+    parser.add_argument ('--no-traffic', action='store_true')  # [--no-traffic]
+    parser.add_argument ('--traffic')                          # [--traffic=<NN>]
+    parser.add_argument ('--no-packet',  action='store_true')  # [--no-packet]
+    parser.add_argument ('--no-remote',  action='store_true')  # [--no-remote]
 
     options, args = parser.parse_known_args()
     sys.argv[1:] = args

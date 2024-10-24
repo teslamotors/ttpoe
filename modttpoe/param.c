@@ -2,19 +2,21 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs directly
- *             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
- *             that establishes a TTP-peer connection with another instance of the same module
- *             running on another Linux machine on the same Layer-2 network. Since TTP runs
- *             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+ * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+ *             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+ *             Kernel Module that establishes a TTP-peer connection with another instance
+ *             of the same module running on another Linux machine on the same Layer-2
+ *             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+ *             Ethernet (TTPoE).
  *
- *             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
- *             designed to be implemented in Hardware as part of Tesla's DOJO project.
+ *             The Protocol is specified to work at high bandwidths over 100Gbps and is
+ *             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+ *             project.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *             This public release of the TTP software implementation is aligned with the
+ *             patent disclosure and public release of the main TTP Protocol
+ *             specification. Users of this software module must take into consideration
+ *             those disclosures in addition to the license agreement mentioned here.
  *
  * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
  *             Bill Chang <wichang@tesla.com>
@@ -26,17 +28,18 @@
  *
  * Version:    08/26/2022 wichang@tesla.com, "Initial version"
  *             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
- *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+ *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
  *             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
  *             09/29/2023 dntundlam@tesla.com, "final touches"
  *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  */
 
 #ifndef MODULE
@@ -48,6 +51,7 @@
 #endif
 
 #include <linux/ctype.h>
+#include <linux/version.h>
 #include <linux/skbuff.h>
 #include <linux/etherdevice.h>
 #include <linux/netdevice.h>
@@ -60,6 +64,7 @@
 #include <linux/ip.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
+#include <net/addrconf.h>
 
 #include <ttp.h>
 
@@ -69,9 +74,7 @@
 #include "noc.h"
 #include "print.h"
 
-
-char *ttp_dev;
-int   ttp_shutdown = 1;         /* 'DOWN' by default - enabled at init after checking */
+u8 ttp_gwmac[ETH_ALEN];
 
 static int ttp_param_dummy_set (const char *val, const struct kernel_param *kp)
 {
@@ -480,7 +483,7 @@ MODULE_PARM_DESC (valid, "    target is valid (default=0, or 1)");
 
 static int ttp_param_gwmac_get (char *buf, const struct kernel_param *kp)
 {
-    return snprintf (buf, 300, "%*phC\n", ETH_ALEN, ttp_debug_gwmac.mac);
+    return snprintf (buf, 300, "%*phC\n", ETH_ALEN, ttp_gwmac);
 }
 
 static const struct kernel_param_ops ttp_param_gwmac_ops = {
@@ -488,14 +491,15 @@ static const struct kernel_param_ops ttp_param_gwmac_ops = {
     .get = ttp_param_gwmac_get,
 };
 
-module_param_cb (gwmac, &ttp_param_gwmac_ops, &ttp_debug_gwmac.mac, 0444);
+module_param_cb (gwmac, &ttp_param_gwmac_ops, &ttp_gwmac, 0444);
 MODULE_PARM_DESC (gwmac, "    modttpoe gateway mac address (format: xx:xx:xx:xx:xx:xx)");
+
 
 static int ttp_param_verbose_set (const char *val, const struct kernel_param *kp)
 {
     int vv = 0;
 
-    if ((0 != kstrtoint (val, 10, &vv)) || vv < 0 || vv > 2) {
+    if ((0 != kstrtoint (val, 10, &vv)) || vv < 0 || vv > 3) {
         return -EINVAL;
     }
 
@@ -508,4 +512,89 @@ static const struct kernel_param_ops ttp_param_verbose_ops = {
 };
 
 module_param_cb (verbose, &ttp_param_verbose_ops, &ttp_verbose, 0644);
-MODULE_PARM_DESC (verbose, "  kernel log verbosity level (default=(-1), 0, 1, 2)");
+MODULE_PARM_DESC (verbose, "  kernel log verbosity level (default=(-1), 0, 1, 2, 3)");
+
+
+static int ttp_param_shutdown_set (const char *val, const struct kernel_param *kp)
+{
+    int vv = 0;
+
+    if ((0 != kstrtoint (val, 10, &vv)) || vv < 0 || vv > 2) {
+        return -EINVAL;
+    }
+
+    return param_set_int (val, kp);
+}
+
+static const struct kernel_param_ops ttp_param_shutdown_ops = {
+    .set = ttp_param_shutdown_set,
+    .get = param_get_int,
+};
+
+module_param_cb (shutdown, &ttp_param_shutdown_ops, &ttp_shutdown, 0644);
+MODULE_PARM_DESC (shutdown, " modttpoe shutdown state");
+
+
+static int ttp_param_encap_set (const char *val, const struct kernel_param *kp)
+{
+    int vv = 0;
+
+    if ((0 != kstrtoint (val, 10, &vv)) || vv < 0 || vv > 2) {
+        return -EINVAL;
+    }
+    if (ttp_encap_ipv4 != vv) {
+        if (val) {
+            /* register a handler to handle ip-encap frames */
+            ttpoe_etype_ipv4.dev = ttpoe_etype_tesla.dev;
+            dev_add_pack (&ttpoe_etype_ipv4);
+            TTP_LOG ("%s: Added: IPv4 Encap)\n", __FUNCTION__);
+        }
+        else {
+            memset (ttp_gwmac, 0, ETH_ALEN);
+            dev_remove_pack (&ttpoe_etype_ipv4);
+            TTP_LOG ("%s: Removed: IPv4 Encap)\n", __FUNCTION__);
+        }
+    }
+
+    ttp_encap_ipv4 = vv;
+    return 0;
+}
+
+static const struct kernel_param_ops ttp_param_encap_ops = {
+    .set = ttp_param_encap_set,
+    .get = param_get_int,
+};
+
+module_param_cb (encap, &ttp_param_encap_ops, &ttp_encap_ipv4, 0644);
+MODULE_PARM_DESC (encap, "    encap mode for TTP: 0 = TTPoE, 1 = TTPoIPv4");
+
+
+static int ttp_param_prefix_set (const char *val, const struct kernel_param *kp)
+{
+    int vv = 0;
+
+    if ((0 != kstrtoint (val, 10, &vv)) || vv < 0 || vv >= 255) {
+        return -EINVAL;
+    }
+
+    ttp_prefix = htonl (vv << 24); /* sets 1st byte */
+    return 0;
+}
+
+static int ttp_param_prefix_get (char *buf, const struct kernel_param *kp)
+{
+    if (ttp_prefix) {
+        return snprintf (buf, 30, "%pI4/8\n", &ttp_prefix);
+    }
+    else {
+        return snprintf (buf, 30, "0\n");
+    }
+}
+
+static const struct kernel_param_ops ttp_param_prefix_ops = {
+    .set = ttp_param_prefix_set,
+    .get = ttp_param_prefix_get,
+};
+
+module_param_cb (prefix, &ttp_param_prefix_ops, &ttp_prefix, 0644);
+MODULE_PARM_DESC (prefix, "   ipv4 prefix: Class-A first byte only: (xx.0.0.0)");

@@ -1,4 +1,5 @@
-<!--# SPDX-License-Identifier: GPL-2.0-or-later, Open Source License Attribution 4.0 International via https://creativecommons.org/licenses/by/4.0/  
+<!--# SPDX-License-Identifier: GPL-2.0-or-later, Open Source License Attribution 4.0 \
+International via https://creativecommons.org/licenses/by/4.0/
 # 2024 Tesla Inc. 
 #
 # TTPoE -- Tesla Transport Protocol over Ethernet -- Open Source Publication
@@ -12,38 +13,39 @@
 #             Diwakar Tundlam
 #             Mackenzie Goodwin
 #
-# TTP kernel  A reference implementation of Tesla Transfer Protocol (TTP) that runs directly
-#             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
-#             that establishes a TTP-peer connection with another instance of the same module
-#             running on another Linux machine on the same Layer-2 network. Since TTP runs
-#             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+# TTP kernel  A reference implementation of Tesla Transfer Protocol (TTP) that runs
+#             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+#             Kernel Module that establishes a TTP-peer connection with another instance
+#             of the same module running on another Linux machine on the same Layer-2
+#             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+#             Ethernet (TTPoE).
 #
-#             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
-#             designed to be implemented in Hardware as part of Tesla's DOJO project.
+#             The Protocol is specified to work at high bandwidths over 100Gbps and is
+#             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+#             project.
 #
-#             This public release of the TTP software implementation is aligned with the (now released) patent
-#             disclosure and public release of the main TTP Protocol specification. Users of
-#             this software module must take into consideration those disclosures in addition
-#             to the license agreement mentioned here.
+#             This public release of the TTP software implementation is aligned with the
+#             patent disclosure and public release of the main TTP Protocol
+#             specification. Users of this software module must take into consideration
+#             those disclosures in addition to the license agreement mentioned here.
 #
-# Kernel Authors:    Diwakar Tundlam
-#                    Bill Chang
-#                    Spencer Sharkey
-#
+# Authors:    Diwakar Tundlam <dntundlam@tesla.com>
+#             Bill Chang <wichang@tesla.com>
+#             Spencer Sharkey <spsharkey@tesla.com>
 #
 # Version:    08/26/2022 wichang@tesla.com, "Initial version"
 #             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
-#             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+#             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
 #             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
 #             08/29/2023 dntundlam@tesla.com, "final touches"
 #
-# This software is licensed under the terms of the GNU General Public License version 2 as published
-# by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+# This software is licensed under the terms of the GNU General Public License version 2
+# as published by the Free Software Foundation, and may be copied, distributed, and
+# modified under those terms.
 #
-# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
-# Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-# See the GNU General Public License for more details.
-#
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+# PARTICULAR PURPOSE. See the GNU General Public License for more details.
 #-->
 
 ````{verbatim}

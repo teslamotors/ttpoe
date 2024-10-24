@@ -1,5 +1,31 @@
 #!/usr/bin/python3
 
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Copyright (c) 2023 Tesla Inc. All rights reserved.
+#
+# TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+#             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+#             Kernel Module that establishes a TTP-peer connection with another instance
+#             of the same module running on another Linux machine on the same Layer-2
+#             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+#             Ethernet (TTPoE). This is a test script.
+#
+#             This public release of the TTP software implementation is aligned with the
+#             patent disclosure and public release of the main TTP Protocol
+#             specification. Users of this software module must take into consideration
+#             those disclosures in addition to the license agreement mentioned here.
+#
+# Authors:    Diwakar Tundlam <dntundlam@tesla.com>
+#
+# This software is licensed under the terms of the GNU General Public License version 2
+# as published by the Free Software Foundation, and may be copied, distributed, and
+# modified under those terms.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+# PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
 import sys
 import time
 import random

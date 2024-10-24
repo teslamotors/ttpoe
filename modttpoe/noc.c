@@ -2,19 +2,21 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs directly
- *             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
- *             that establishes a TTP-peer connection with another instance of the same module
- *             running on another Linux machine on the same Layer-2 network. Since TTP runs
- *             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+ * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+ *             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+ *             Kernel Module that establishes a TTP-peer connection with another instance
+ *             of the same module running on another Linux machine on the same Layer-2
+ *             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+ *             Ethernet (TTPoE).
  *
- *             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
- *             designed to be implemented in Hardware as part of Tesla's DOJO project.
+ *             The Protocol is specified to work at high bandwidths over 100Gbps and is
+ *             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+ *             project.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *             This public release of the TTP software implementation is aligned with the
+ *             patent disclosure and public release of the main TTP Protocol
+ *             specification. Users of this software module must take into consideration
+ *             those disclosures in addition to the license agreement mentioned here.
  *
  * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
  *             Bill Chang <wichang@tesla.com>
@@ -26,17 +28,18 @@
  *
  * Version:    08/26/2022 wichang@tesla.com, "Initial version"
  *             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
- *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+ *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
  *             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
  *             09/29/2023 dntundlam@tesla.com, "final touches"
  *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  */
 
 #ifndef MODULE
@@ -64,6 +67,7 @@
 #include <linux/module.h>
 #include <linux/debugfs.h>
 #include <linux/proc_fs.h>
+#include <net/addrconf.h>
 
 #include <ttp.h>
 
@@ -86,7 +90,6 @@ static struct device *ttp_device;
 #define TTP_TARGET_INVALID  (-1)
 struct ttpoe_noc_host ttp_debug_source;
 struct ttpoe_noc_host ttp_debug_target;
-struct ttpoe_noc_host ttp_debug_gwmac;
 
 
 int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_noc_host *tg)
@@ -120,14 +123,14 @@ int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_noc_host *tg)
     mac[4] = ttp_debug_source.mac[4];
     mac[5] = ttp_debug_source.mac[5];
 
-    skid = ttp_tag_key_make (mac, tg->vc, tg->gw);
+    skid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_encap_ipv4);
 
     /* dest mac */
     mac[3] = tg->mac[3];
     mac[4] = tg->mac[4];
     mac[5] = tg->mac[5];
 
-    lkid = ttp_tag_key_make (mac, tg->vc, tg->gw);
+    lkid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_encap_ipv4);
 
     /* check source kid == target kid */
     if (skid == lkid) {
@@ -182,12 +185,12 @@ int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, const int nl,
         return -EINVAL;
     }
     if (nl == 2) { /* control pkt */
-        if (ttp_verbose > 0) {
+        if (ttp_verbose > 2) {
             TTP_DBG ("%s: Control pkt target.vc: %*phC.%d gw:%d valid:%d len:%d\n",
                      __FUNCTION__, ETH_ALEN, tg->mac, tg->vc, tg->gw, tg->ve, nl);
         }
         clt._rkid = kid;
-        clt.gwy = 1;
+        clt.gw3 = 1;
         kid = clt._rkid;
         goto force;
     }
@@ -225,8 +228,10 @@ force:
     ev->evt = evnt;
     ev->kid = kid;
 
-    TTP_DBG ("%s: 0x%016llx.%d evnt:%s nl:%d\n", __FUNCTION__,
-             cpu_to_be64 (kid), ev->idx, TTP_EVENT_NAME (evnt), nl);
+    if (ttp_verbose_for_ctrl (nl)) {
+        TTP_DBG ("%s: 0x%016llx.%d evnt:%s nl:%d\n", __FUNCTION__,
+                 cpu_to_be64 (kid), ev->idx, TTP_EVENT_NAME (evnt), nl);
+    }
 
     if (TTP_EV__TXQ__TTP_PAYLOAD != evnt) {
         ev->mrk = TTP_EVENTS_FENCE__CTL_ELEM;
@@ -329,7 +334,8 @@ static int ttpoe_noc_debug_mmap (struct file *filp, struct vm_area_struct *vma)
                             vma->vm_end - vma->vm_start, vma->vm_page_prot);
 }
 
-static ssize_t ttpoe_noc_debug_read (struct file *filp, char *buf, size_t nbytes, loff_t *ppos)
+static ssize_t ttpoe_noc_debug_read (struct file *filp, char *buf,
+                                     size_t nbytes, loff_t *ppos)
 {
     int kc, rc;
 
@@ -378,26 +384,6 @@ static const struct file_operations ttpoe_noc_debug_fops = {
 };
 
 
-static struct class *ttp_wrap_class_create (const char *name)
-{
-    return class_create (
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 4, 0)
-        THIS_MODULE,
-#endif
-        name);
-}
-
-static int ttp_dev_uevent (
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
-    const
-#endif
-    struct device *dev, struct kobj_uevent_env *env)
-{
-    add_uevent_var (env, "DEVMODE=%#o", 0644);
-    return 0;
-}
-
-
 int __init ttpoe_noc_debug_init (void)
 {
     int rv;
@@ -407,7 +393,8 @@ int __init ttpoe_noc_debug_init (void)
         goto out;
     }
 
-    if ((rv = register_chrdev (TTP_MAJOR_DEV_NUM, "ttpoe", &ttpoe_noc_debug_fops)) < 0) {
+    if ((rv = register_chrdev (TTP_MAJOR_DEV_NUM, "ttpoe",
+                               &ttpoe_noc_debug_fops)) < 0) {
         rv = -EIO;
         goto out;
     }
@@ -418,7 +405,8 @@ int __init ttpoe_noc_debug_init (void)
     }
 
     ttp_class->dev_uevent = ttp_dev_uevent;
-    if (IS_ERR (ttp_device = device_create (ttp_class, NULL, MKDEV (TTP_MAJOR_DEV_NUM, 0),
+    if (IS_ERR (ttp_device = device_create (ttp_class, NULL,
+                                            MKDEV (TTP_MAJOR_DEV_NUM, 0),
                                             NULL, "noc_debug"))) {
         rv = PTR_ERR (ttp_device);
         goto out;

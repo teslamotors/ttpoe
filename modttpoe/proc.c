@@ -2,19 +2,21 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs directly
- *             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
- *             that establishes a TTP-peer connection with another instance of the same module
- *             running on another Linux machine on the same Layer-2 network. Since TTP runs
- *             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+ * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+ *             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+ *             Kernel Module that establishes a TTP-peer connection with another instance
+ *             of the same module running on another Linux machine on the same Layer-2
+ *             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+ *             Ethernet (TTPoE).
  *
- *             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
- *             designed to be implemented in Hardware as part of Tesla's DOJO project.
+ *             The Protocol is specified to work at high bandwidths over 100Gbps and is
+ *             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+ *             project.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *             This public release of the TTP software implementation is aligned with the
+ *             patent disclosure and public release of the main TTP Protocol
+ *             specification. Users of this software module must take into consideration
+ *             those disclosures in addition to the license agreement mentioned here.
  *
  * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
  *             Bill Chang <wichang@tesla.com>
@@ -26,17 +28,18 @@
  *
  * Version:    08/26/2022 wichang@tesla.com, "Initial version"
  *             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
- *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+ *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
  *             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
  *             09/29/2023 dntundlam@tesla.com, "final touches"
  *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  */
 
 #ifndef MODULE
@@ -48,6 +51,7 @@
 #endif
 
 #include <linux/ctype.h>
+#include <linux/version.h>
 #include <linux/skbuff.h>
 #include <linux/etherdevice.h>
 #include <linux/netdevice.h>
@@ -60,6 +64,7 @@
 #include <linux/ip.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
+#include <net/addrconf.h>
 
 #include <ttp.h>
 
@@ -91,7 +96,7 @@
     seq_printf (seq, TTP_PROC_LGX_FMT_1    \
                 TTP_PROC_LGX_FMT_2, ct++,  \
                 TTP_EV_LOG_INDX_OF (lg),   \
-                lg->fl, lg->ln,           \
+                lg->fl, lg->ln,            \
                 max (0ULL, lts - lg->ts),  \
                 "-","-",'-',               \
                 TTP_EVLOG_GLYPH (aa),      \
@@ -305,7 +310,7 @@ static int ttpoe_proc_target_show (struct seq_file *seq, void *v)
 
     seq_printf (seq, "target-mac:%*phC  valid:%d  vci:%d  gw:%d  gwmac:%*phC\n",
                 ETH_ALEN, ttp_debug_target.mac, ttp_debug_target.ve,
-                ttp_debug_target.vc, ttp_debug_target.gw, ETH_ALEN, ttp_debug_gwmac.mac);
+                ttp_debug_target.vc, ttp_debug_target.gw, ETH_ALEN, ttp_gwmac);
 
     return 0;
 }
@@ -318,22 +323,28 @@ int __init ttpoe_proc_init (void)
         return -ENOMEM;
     }
 
-    if (!proc_create_single ("modttpoe/ev_log", 0444, init_net.proc_net, &ttpoe_proc_ev_log_show)) {
+    if (!proc_create_single ("modttpoe/ev_log", 0444,
+                             init_net.proc_net, &ttpoe_proc_ev_log_show)) {
         goto out;
     }
-    if (!proc_create_single ("modttpoe/pool", 0444, init_net.proc_net, &ttpoe_proc_pool_show)) {
+    if (!proc_create_single ("modttpoe/pool", 0444,
+                             init_net.proc_net, &ttpoe_proc_pool_show)) {
         goto out;
     }
-    if (!proc_create_single ("modttpoe/queue", 0444, init_net.proc_net, &ttpoe_proc_queue_show)) {
+    if (!proc_create_single ("modttpoe/queue", 0444,
+                             init_net.proc_net, &ttpoe_proc_queue_show)) {
         goto out;
     }
-    if (!proc_create_single ("modttpoe/tags", 0444, init_net.proc_net, &ttpoe_proc_tags_show)) {
+    if (!proc_create_single ("modttpoe/tags", 0444,
+                             init_net.proc_net, &ttpoe_proc_tags_show)) {
         goto out;
     }
-    if (!proc_create_single ("modttpoe/rbtree", 0444, init_net.proc_net, &ttpoe_proc_rbtree_show)) {
+    if (!proc_create_single ("modttpoe/rbtree", 0444,
+                             init_net.proc_net, &ttpoe_proc_rbtree_show)) {
         goto out;
     }
-    if (!proc_create_single ("modttpoe/target", 0444, init_net.proc_net, &ttpoe_proc_target_show)) {
+    if (!proc_create_single ("modttpoe/target", 0444,
+                             init_net.proc_net, &ttpoe_proc_target_show)) {
         goto out;
     }
 

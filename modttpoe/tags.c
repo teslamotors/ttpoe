@@ -2,19 +2,21 @@
 /*
  * Copyright (c) 2023 Tesla Inc. All rights reserved.
  *
- * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs directly
- *             over Ethernet Layer-2 Network. This is implemented as a Loadable Kernel Module
- *             that establishes a TTP-peer connection with another instance of the same module
- *             running on another Linux machine on the same Layer-2 network. Since TTP runs
- *             over Ethernet, it is often referred to as TTP Over Ethernet (TTPoE).
+ * TTP (TTPoE) A reference implementation of Tesla Transport Protocol (TTP) that runs
+ *             directly over Ethernet Layer-2 Network. This is implemented as a Loadable
+ *             Kernel Module that establishes a TTP-peer connection with another instance
+ *             of the same module running on another Linux machine on the same Layer-2
+ *             network. Since TTP runs over Ethernet, it is often referred to as TTP Over
+ *             Ethernet (TTPoE).
  *
- *             The Protocol is specified to work at high bandwidths over 100Gbps and is mainly
- *             designed to be implemented in Hardware as part of Tesla's DOJO project.
+ *             The Protocol is specified to work at high bandwidths over 100Gbps and is
+ *             mainly designed to be implemented in Hardware as part of Tesla's DOJO
+ *             project.
  *
- *             This public release of the TTP software implementation is aligned with the patent
- *             disclosure and public release of the main TTP Protocol specification. Users of
- *             this software module must take into consideration those disclosures in addition
- *             to the license agreement mentioned here.
+ *             This public release of the TTP software implementation is aligned with the
+ *             patent disclosure and public release of the main TTP Protocol
+ *             specification. Users of this software module must take into consideration
+ *             those disclosures in addition to the license agreement mentioned here.
  *
  * Authors:    Diwakar Tundlam <dntundlam@tesla.com>
  *             Bill Chang <wichang@tesla.com>
@@ -26,17 +28,18 @@
  *
  * Version:    08/26/2022 wichang@tesla.com, "Initial version"
  *             02/09/2023 spsharkey@tesla.com, "add ttpoe header parser + test"
- *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - network, transport, and payload"
+ *             05/11/2023 dntundlam@tesla.com, "ttpoe layers - nwk, transport, payload"
  *             07/11/2023 dntundlam@tesla.com, "functional state-machine, added tests"
  *             09/29/2023 dntundlam@tesla.com, "final touches"
  *             09/10/2024 dntundlam@tesla.com, "sync with TTP_Opcodes.pdf [rev 1.5]"
  *
- * This software is licensed under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation, and may be copied, distributed, and modified under those terms.
+ * This software is licensed under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation, and may be copied, distributed, and
+ * modified under those terms.
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
- * See the GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; Without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE. See the GNU General Public License for more details.
  */
 
 #ifndef MODULE
@@ -48,6 +51,7 @@
 #endif
 
 #include <linux/skbuff.h>
+#include <linux/version.h>
 #include <linux/netdevice.h>
 #include <linux/types.h>
 #include <linux/bitops.h>
@@ -60,6 +64,7 @@
 #include <linux/proc_fs.h>
 #include <linux/timer.h>
 #include <linux/crc16.h>
+#include <net/addrconf.h>
 
 #include <ttp.h>
 
@@ -78,7 +83,7 @@ struct ttp_link_tag  ttp_link_tag_tbl_2[TTP_TAG_TBL_SIZE][TTP_TAG_TBL_BKTS_NUM];
 
 struct ttp_stats_all ttp_stats;
 
-static int ttp_tag_seq_init_val = 1; /* can be any value (try: testing with other values) */
+static int ttp_tag_seq_init_val = 1; /* can be any value (try: test with other values) */
 
 static const struct kernel_param_ops ttp_param_tag_seq_ops = {
     .set = param_set_int,
@@ -90,7 +95,8 @@ module_param_cb (tag_seq, &ttp_param_tag_seq_ops, &ttp_tag_seq_init_val, 0444);
 MODULE_PARM_DESC (tag_seq, "  starting value of tag seq number (default=1)");
 
 
-TTP_NOTRACE static u8 ttp_tag_index_hash_get (u64 kid)
+TTP_NOTRACE
+static u8 ttp_tag_index_hash_get (u64 kid)
 {
     struct ttp_link_tag lt;
 
@@ -99,7 +105,8 @@ TTP_NOTRACE static u8 ttp_tag_index_hash_get (u64 kid)
 }
 
 
-TTP_NOTRACE static u8 ttp_tag_index_vci_get (u64 kid)
+TTP_NOTRACE
+static u8 ttp_tag_index_vci_get (u64 kid)
 {
     struct ttp_link_tag lt;
 
@@ -108,12 +115,23 @@ TTP_NOTRACE static u8 ttp_tag_index_vci_get (u64 kid)
 }
 
 
-TTP_NOTRACE static u8 ttp_tag_index_gwy_get (u64 kid)
+TTP_NOTRACE
+static u8 ttp_tag_index_gw3_get (u64 kid)
 {
     struct ttp_link_tag lt;
 
     lt._rkid = kid;
-    return lt.gwy;
+    return lt.gw3;
+}
+
+
+TTP_NOTRACE
+static u8 ttp_tag_index_tp4_get (u64 kid)
+{
+    struct ttp_link_tag lt;
+
+    lt._rkid = kid;
+    return lt.tp4;
 }
 
 
@@ -122,7 +140,7 @@ TTP_NOTRACE static u8 ttp_tag_index_gwy_get (u64 kid)
  * ttp end-point. The u8 hash-value is also stored. The 256-entry 2-way hash-table is a
  * cache for the fully-associative sw-link-tag table. The tag is 'invalid' at init.
  */
-u64 ttp_tag_key_make (const u8 *mac, u8 vc, u8 gw)
+u64 ttp_tag_key_make (const u8 *mac, u8 vc, bool gw, bool t4)
 {
     struct ttp_link_tag lt;
 
@@ -135,7 +153,8 @@ u64 ttp_tag_key_make (const u8 *mac, u8 vc, u8 gw)
     lt.hvl = ttp_tag_index_hash_calc (mac);
 
     lt.vci = vc;
-    lt.gwy = gw;
+    lt.gw3 = gw;
+    lt.tp4 = t4;
 
     lt.mac[0] = mac[3];
     lt.mac[1] = mac[4];
@@ -150,7 +169,8 @@ u64 ttp_tag_key_make (const u8 *mac, u8 vc, u8 gw)
 }
 
 
-TTP_NOINLINE static void ttp_tag_signal_tag (struct ttp_fsm_event *ev)
+TTP_NOINLINE
+static void ttp_tag_signal_tag (struct ttp_fsm_event *ev)
 {
     struct ttp_link_tag *lt;
 
@@ -163,7 +183,8 @@ TTP_NOINLINE static void ttp_tag_signal_tag (struct ttp_fsm_event *ev)
 }
 
 
-TTP_NOINLINE static enum ttp_states_enum ttp_tag_get_state (u64 kid)
+TTP_NOINLINE
+static enum ttp_states_enum ttp_tag_get_state (u64 kid)
 {
     struct ttp_link_tag *lt;
 
@@ -174,7 +195,8 @@ TTP_NOINLINE static enum ttp_states_enum ttp_tag_get_state (u64 kid)
 }
 
 
-TTP_NOINLINE void ttp_tag_reset (struct ttp_link_tag *lt)
+TTP_NOINLINE
+void ttp_tag_reset (struct ttp_link_tag *lt)
 {
     lt->valid       = 0;
     lt->state       = TTP_ST__CLOSED;
@@ -200,7 +222,7 @@ TTP_NOINLINE void ttp_tag_reset (struct ttp_link_tag *lt)
 /* add 'tag' to table: return 0 (hash val in kid); 1 if both bkts are full*/
 int ttp_tag_add (u64 kid)
 {
-    u8  vc, gw, hv;
+    u8  vc, gw, hv, t4;
     int bk;
     struct ttp_link_tag *lt;
 
@@ -210,7 +232,8 @@ int ttp_tag_add (u64 kid)
 
     hv = ttp_tag_index_hash_get (kid);
     vc = ttp_tag_index_vci_get (kid);
-    gw = ttp_tag_index_gwy_get (kid);
+    gw = ttp_tag_index_gw3_get (kid);
+    t4 = ttp_tag_index_tp4_get (kid);
 
     if (vc == 0) {
         lt = ttp_link_tag_tbl_0[hv];
@@ -234,13 +257,14 @@ int ttp_tag_add (u64 kid)
             lt->_rkid = kid;
             ttp_rbtree_tag_add (lt);
 
-            lt->gwy = gw;
             lt->bkt = bk;
+            lt->gw3 = gw;
+            lt->tp4 = t4;
             lt->hvl = hv;
 
             lt->retire_id = ttp_tag_seq_init_val;
             lt->rx_seq_id = ttp_tag_seq_init_val;
-            lt->tx_seq_id = ttp_tag_seq_init_val + 1; /* TTP_OPEN uses init-value, use next */
+            lt->tx_seq_id = ttp_tag_seq_init_val + 1; /* TTP_OPEN: init-val, use next */
 
             atomic_inc (&ttp_stats.adds[bk]);
             return 0;
@@ -256,68 +280,11 @@ int ttp_tag_add (u64 kid)
 }
 
 
-/*
- * find tag in specified bkt and return 0 if found; -1 if not found **
-TTP_NOTRACE static int ttp_tag_find_in_bkt (u64 kid, int bk, u8 *hvp)
-{
-    u8 hv;
-
-    if (!kid || !hvp || (bk != 0 && bk != 1)) {
-        return -1;
-    |
-
-    hv = ttp_tag_index_hash_get (kid);
-
-    if (!ttp_link_tag_tbl[hv][bk].valid || (ttp_link_tag_tbl[hv][bk]._rkid != kid)) {
-        return -1;
-    }
-
-    *hvp = hv;
-    return 0;
-}
-
- * find 'tag' in each bucket of tags table; return 0 if found; 1 if not found; -1 on error *
-TTP_NOTRACE static int ttp_tag_find (u64 kid, int *bk, u8 *hvp)
-{
-    if (!kid || !bk || !hvp) {
-        return -1;
-    }
-
-    *bk = 0;
-    if (0 == ttp_tag_find_in_bkt (kid, *bk, hvp)) {
-        return 0;
-    }
-
-    *bk = 1;
-    if (0 == ttp_tag_find_in_bkt (kid, *bk, hvp)) {
-        return 0;
-    }
-    return 1;                   * caller should assume global tag *
-}
-
-
- * remove 'tag' from tag table and return the hash value; -1 if not found *
-TTP_NOTRACE static int ttp_tag_remove (u64 kid)
-{
-* ******* HANDLE TAG REMOVE LATER ********
-
-    u8 tag;
-    int hv0, hv1;
-
-    hv0 = ttp_tag_find_in_bkt (kid, 0, &tag);
-    hv1 = ttp_tag_find_in_bkt (kid, 1, &tag);
-
-    handle: hv0 and hv1 can each be -1, 0, or 1
-*
-    return 0;
-}
-*/
-
-
-TTP_NOINLINE static void ttp_fsm_lookup_state_table (u64 kid, enum ttp_events_enum evn,
-                                                     enum ttp_states_enum *cs,
-                                                     enum ttp_states_enum *ns,
-                                                     enum ttp_response_enum *rs)
+TTP_NOINLINE
+static void ttp_fsm_lookup_state_table (u64 kid, enum ttp_events_enum evn,
+                                        enum ttp_states_enum *cs,
+                                        enum ttp_states_enum *ns,
+                                        enum ttp_response_enum *rs)
 {
     *cs = ttp_tag_get_state (kid);
     *ns = ttp_fsm_table[evn][*cs].next_state;
@@ -325,10 +292,11 @@ TTP_NOINLINE static void ttp_fsm_lookup_state_table (u64 kid, enum ttp_events_en
 }
 
 
-TTP_NOINLINE void ttp_fsm_evlog_add (const char *fil, const int lin,
-                                     const char *fun, const int pos,
-                                     struct ttp_fsm_event *qev, enum ttp_events_enum evn,
-                                     enum ttp_opcodes_enum opc, struct ttp_pkt_info *pif)
+TTP_NOINLINE
+void ttp_fsm_evlog_add (const char *fil, const int lin,
+                        const char *fun, const int pos,
+                        struct ttp_fsm_event *qev, enum ttp_events_enum evn,
+                        enum ttp_opcodes_enum opc, struct ttp_pkt_info *pif)
 {
     struct ttp_link_tag *lt;
     struct ttp_fsm_evlog *lg;
@@ -395,7 +363,8 @@ TTP_NOINLINE void ttp_fsm_evlog_add (const char *fil, const int lin,
 DECLARE_BITMAP (ttp_bloom_bitmap, TTP_BLOOM_SIZE);
 
 /* using reverse-bits */
-TTP_NOTRACE static u32 ttp_bloom_hash1 (u64 kid)
+TTP_NOTRACE
+static u32 ttp_bloom_hash1 (u64 kid)
 {
     u64 rv = 0;
 
@@ -411,7 +380,8 @@ TTP_NOTRACE static u32 ttp_bloom_hash1 (u64 kid)
 
 
 /* using crc16 */
-TTP_NOTRACE static u32 ttp_bloom_hash2 (u64 kid)
+TTP_NOTRACE
+static u32 ttp_bloom_hash2 (u64 kid)
 {
     u32 rv = 0;
 
@@ -427,7 +397,8 @@ TTP_NOTRACE static u32 ttp_bloom_hash2 (u64 kid)
 
 
 /* using a FNV-like hash function */
-TTP_NOTRACE static u32 ttp_bloom_hash3 (u64 kid)
+TTP_NOTRACE
+static u32 ttp_bloom_hash3 (u64 kid)
 {
     u32 rv = 0;
 
@@ -442,7 +413,8 @@ TTP_NOTRACE static u32 ttp_bloom_hash3 (u64 kid)
 }
 
 
-TTP_NOTRACE void ttp_bloom_add (u64 kid)
+TTP_NOTRACE
+void ttp_bloom_add (u64 kid)
 {
     set_bit (ttp_bloom_hash1 (kid), ttp_bloom_bitmap);
     set_bit (ttp_bloom_hash2 (kid), ttp_bloom_bitmap);
@@ -450,7 +422,8 @@ TTP_NOTRACE void ttp_bloom_add (u64 kid)
 }
 
 
-TTP_NOTRACE int ttp_bloom_test (u64 kid)
+TTP_NOTRACE
+int ttp_bloom_test (u64 kid)
 {
     return test_bit (ttp_bloom_hash1 (kid), ttp_bloom_bitmap)
         && test_bit (ttp_bloom_hash2 (kid), ttp_bloom_bitmap);
@@ -473,7 +446,8 @@ static int ttp_rbtree_tag_key_cmp (struct ttp_link_tag *t1, struct ttp_link_tag 
     }
 }
 
-TTP_NOINLINE void ttp_rbtree_tag_add (struct ttp_link_tag *tag)
+TTP_NOINLINE
+void ttp_rbtree_tag_add (struct ttp_link_tag *tag)
 {
     struct rb_node **new, *parent = NULL;
     struct ttp_link_tag *lt;
@@ -499,7 +473,8 @@ TTP_NOINLINE void ttp_rbtree_tag_add (struct ttp_link_tag *tag)
     rb_insert_color (&tag->rbn, &ttp_global_root_head.tag_rbroot);
 }
 
-TTP_NOINLINE void ttp_rbtree_tag_del (u64 kid)
+TTP_NOINLINE
+void ttp_rbtree_tag_del (u64 kid)
 {
     struct rb_node **new, *parent = NULL;
     struct ttp_link_tag *lt, tag = {0};
@@ -523,7 +498,8 @@ TTP_NOINLINE void ttp_rbtree_tag_del (u64 kid)
     }
 }
 
-TTP_NOINLINE struct ttp_link_tag *ttp_rbtree_tag_get (u64 kid)
+TTP_NOINLINE
+struct ttp_link_tag *ttp_rbtree_tag_get (u64 kid)
 {
     struct rb_node **new, *parent = NULL;
     struct ttp_link_tag *lt, tag = {0};
@@ -551,7 +527,8 @@ TTP_NOINLINE struct ttp_link_tag *ttp_rbtree_tag_get (u64 kid)
 
 
 /* return 0 on failure to get pool event */
-TTP_NOINLINE static bool ttp_evt_pget_locked (struct ttp_fsm_event **evp)
+TTP_NOINLINE
+static bool ttp_evt_pget_locked (struct ttp_fsm_event **evp)
 {
     struct ttp_fsm_event *ev;
 
@@ -589,7 +566,8 @@ bool ttp_evt_pget (struct ttp_fsm_event **evp)
 }
 
 
-TTP_NOINLINE static void ttp_evt_pput_locked (struct ttp_fsm_event *ev)
+TTP_NOINLINE
+static void ttp_evt_pput_locked (struct ttp_fsm_event *ev)
 {
     if (ev->rsk) {
         if (ev->mrk == TTP_EVENTS_FENCE_RX_Q_ELEM) {
@@ -631,7 +609,8 @@ void ttp_evt_pput (struct ttp_fsm_event *ev)
 
 #define TTP_NUM_CHANNELS  4
 
-TTP_NOINLINE static int ttp_evt_getrr_locked (struct ttp_fsm_event **evp)
+TTP_NOINLINE
+static int ttp_evt_getrr_locked (struct ttp_fsm_event **evp)
 {
     static int rri = 0;
     int iv;
@@ -656,7 +635,8 @@ TTP_NOINLINE static int ttp_evt_getrr_locked (struct ttp_fsm_event **evp)
 }
 
 
-TTP_UNUSED TTP_NOINLINE static int ttp_evt_getsp_locked (struct ttp_fsm_event **evp)
+TTP_UNUSED TTP_NOINLINE
+static int ttp_evt_getsp_locked (struct ttp_fsm_event **evp)
 {
     struct ttp_fsm_event *ev;
 
@@ -688,7 +668,8 @@ TTP_UNUSED TTP_NOINLINE static int ttp_evt_getsp_locked (struct ttp_fsm_event **
 }
 
 
-TTP_NOINLINE static int ttp_evt_dequ (void)
+TTP_NOINLINE
+static int ttp_evt_dequ (void)
 {
     int chnl;
     enum ttp_states_enum cs, ns;
@@ -721,31 +702,38 @@ TTP_NOINLINE static int ttp_evt_dequ (void)
     /* lookup fsm table */
     ttp_fsm_lookup_state_table (ev->kid, ev->evt, &cs, &ns, &rs);
 
-    TTP_DBG ("##-> FSM Step: %s ==> %s / %s ==> %s\n",
-             TTP_STATE_NAME (cs), TTP_EVENT_NAME (ev->evt),
-             TTP_RESPONSE_NAME (rs), TTP_STATE_NAME (ns));
-
-    TTP_DBG ("`-> channel:%d 0x%016llx.%d rx:%d tx:%d\n", chnl,
-             cpu_to_be64 (ev->kid), ev->idx, ev->psi.rxi_seq, ev->psi.txi_seq);
+    if (ttp_verbose_for_ctrl (ev->psi.noc_len)) {
+        TTP_DBG ("##-> FSM Step: %s ==> %s / %s ==> %s\n",
+                 TTP_STATE_NAME (cs), TTP_EVENT_NAME (ev->evt),
+                 TTP_RESPONSE_NAME (rs), TTP_STATE_NAME (ns));
+        TTP_DBG ("`-> channel:%d 0x%016llx.%d rx:%d tx:%d\n", chnl,
+                 cpu_to_be64 (ev->kid), ev->idx, ev->psi.rxi_seq, ev->psi.txi_seq);
+    }
 
     TTP_EVLOG (ev, ev->evt, ttp_fsm_response_op[rs]);
 
     /* handle event */
     if ((lt = ttp_rbtree_tag_get (ev->kid))) {
-        TTP_DBG ("##`-> FSM Event-Handle: %s lt-rx:%d lt-tx:%d\n", TTP_EVENT_NAME (ev->evt),
-                 lt->rx_seq_id, lt->tx_seq_id);
+        if (ttp_verbose_for_ctrl (ev->psi.noc_len)) {
+            TTP_DBG ("##`-> FSM Event-Handle: %s lt-rx:%d lt-tx:%d gw:%d tp:%d\n",
+                     TTP_EVENT_NAME (ev->evt), lt->rx_seq_id, lt->tx_seq_id,
+                     lt->gw3, lt->tp4);
+        }
     }
-
     dqfnp = ttp_fsm_event_handle_fn[ev->evt];
     if (dqfnp && ev->rsk) {
-        dqfnp (ev);
+        if (!dqfnp (ev)) {
+            TTP_DBG ("!!`-> FSM Event-Handle: %s [FAILED]\n", TTP_EVENT_NAME (ev->evt));
+        }
     }
 
     /* do response */
     TTP_DBG ("##`-> FSM Response: %s\n", TTP_RESPONSE_NAME (rs));
     dqfnp = ttp_fsm_response_fn[rs];
     if (dqfnp) {
-        dqfnp (ev);
+        if (!dqfnp (ev)) {
+            TTP_DBG ("!!`-> FSM Response: %s [FAILED]\n", TTP_RESPONSE_NAME (rs));
+        }
     }
 
     ttp_tag_signal_tag (ev);
@@ -754,9 +742,10 @@ TTP_NOINLINE static int ttp_evt_dequ (void)
     TTP_DBG ("##`-> FSM State-Entry: %s\n", TTP_STATE_NAME (ns));
     dqfnp = ttp_fsm_entry_function[ns];
     if (dqfnp) {
-        dqfnp (ev);
+        if (!dqfnp (ev)) {
+            TTP_DBG ("##`-> FSM State-Entry: %s [FAILED]\n", TTP_STATE_NAME (ns));
+        }
     }
-
     if (lt) {
         schedule_work (&lt->wkq);
     }
@@ -771,7 +760,8 @@ end:
 }
 
 
-TTP_NOINLINE static void ttp_evt_enqu_locked (struct ttp_fsm_event *ev)
+TTP_NOINLINE
+static void ttp_evt_enqu_locked (struct ttp_fsm_event *ev)
 {
     switch (ev->evt) {
     case TTP_EV__RXQ__TTP_OPEN ... TTP_EV__RXQ__TTP_UNXP_PAYLD:
@@ -804,7 +794,8 @@ TTP_NOINLINE static void ttp_evt_enqu_locked (struct ttp_fsm_event *ev)
 }
 
 
-TTP_NOINLINE static struct ttp_fsm_event *ttp_evt_cpqu_locked (const struct ttp_fsm_event *qev)
+TTP_NOINLINE
+static struct ttp_fsm_event *ttp_evt_cpqu_locked (const struct ttp_fsm_event *qev)
 {
     struct ttp_fsm_event *ev;
 
@@ -842,7 +833,8 @@ int ttp_noc_dequ (struct ttp_link_tag *lt)
 
     mutex_unlock (&ttp_global_root_head.event_mutx);
 
-    TTP_DBG ("%s: 0x%016llx.%d evnt: %s\n", __FUNCTION__, cpu_to_be64 (tev->kid), tev->idx,
+    TTP_DBG ("%s: 0x%016llx.%d evnt: %s\n", __FUNCTION__,
+             cpu_to_be64 (tev->kid), tev->idx,
              TTP_EVENT_IS_VALID (tev->evt) ? TTP_EVENT_NAME (tev->evt) : "null");
 
     ttp_evt_pput (tev);
@@ -876,14 +868,15 @@ void ttp_noc_requ (struct ttp_link_tag *lt)
             if ((ev = ttp_evt_cpqu_locked (tev))) {
                 TTP_DBG ("%s: `-> %senqueue#%d %s len:%d tx:%d mark:%s\n", __FUNCTION__,
                          lt->try ? "re-" : "", lt->try, TTP_EVENT_NAME (tev->evt),
-                         ev->psi.noc_len, ev->psi.txi_seq, TTP_EVENTS_FENCE_TO_STR (tev->mrk));
+                         ev->psi.noc_len, ev->psi.txi_seq,
+                         TTP_EVENTS_FENCE_TO_STR (tev->mrk));
                 if (lt->try) {
                     TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_REQ, TTP_OP__TTP_PAYLOAD);
                 }
 
                 TTP_RUN_SPIN_LOCKED ({
                     lt->txt++;
-                    lt->try++;      /* re/try with this tx-seq-id; increment retry count */
+                    lt->try++;    /* re/try with this tx-seq-id; increment retry count */
                 });
 
                 schedule_work (&lt->wkq);
@@ -918,7 +911,8 @@ void ttp_noc_requ (struct ttp_link_tag *lt)
 }
 
 
-TTP_NOINLINE static void ttp_do_global_work (struct work_struct *wk)
+TTP_NOINLINE
+static void ttp_do_global_work (struct work_struct *wk)
 {
     int rv = 0;
 
@@ -937,7 +931,8 @@ TTP_NOINLINE static void ttp_do_global_work (struct work_struct *wk)
 }
 
 
-TTP_NOINLINE static void ttp_do_tag_work (struct work_struct *wk)
+TTP_NOINLINE
+static void ttp_do_tag_work (struct work_struct *wk)
 {
     int rv = 0;
     bool do_tex = false;
@@ -979,7 +974,8 @@ TTP_NOINLINE static void ttp_do_tag_work (struct work_struct *wk)
 }
 
 
-TTP_NOINLINE static void ttp_fsm_tag_timer_callback (struct timer_list *tl)
+TTP_NOINLINE
+static void ttp_fsm_tag_timer_callback (struct timer_list *tl)
 {
     struct ttp_link_tag *lt;
 
@@ -994,15 +990,10 @@ TTP_NOINLINE static void ttp_fsm_tag_timer_callback (struct timer_list *tl)
 }
 
 
-TTP_NOINLINE static void ttp_fsm_global_timer_callback (struct timer_list *tl)
+TTP_NOINLINE
+static void ttp_fsm_global_timer_callback (struct timer_list *tl)
 {
     /* placeholder for any global periodic work */
-}
-
-
-void ttp_gwmacadv (void)
-{
-    ttpoe_noc_debug_tx (NULL, NULL, 2, TTP_EV__AKQ__OPEN_NACK, &ttp_debug_gwmac);
 }
 
 
