@@ -289,6 +289,7 @@ struct ttp_stats_all {
 
 
 extern struct ttp_stats_all ttp_stats;
+extern int    ttp_tag_seq_init_val;
 
 /* separate link-tag tables for each vci: [0, 1, 2] */
 extern struct ttp_link_tag ttp_link_tag_tbl_0[TTP_TAG_TBL_SIZE][TTP_TAG_TBL_BKTS_NUM];

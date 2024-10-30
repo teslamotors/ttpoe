@@ -51,7 +51,8 @@ peerLock = ""
 verbose  = 0
 connVCI  = "0"
 tagSeqi  = "0"
-gwmac    = ""
+nhmac    = ""
+ipv4Arg  = 0
 
 modpath  = "/sys/module/modttpoe/parameters"
 procpath = "/proc/net/modttpoe"
@@ -89,7 +90,8 @@ def setUpModule():
     global verbose
     global connVCI
     global tagSeqi
-    global gwmac
+    global nhmac
+    global ipv4Arg
 
     if "-vv" in sys.argv[1:] or "--vverbose" in sys.argv[1:]:
         verbose = 2
@@ -108,22 +110,20 @@ def setUpModule():
             print (f"     SelfDev: {selfDev} (override)")
     elif options.ipv4:
         selfDev = getDefaultIP4Dev()
+        ipv4Arg = 1
     else:
         selfDev = getDefaultEthDev()
+        ipv4Arg = 0
     if verbose:
         print (f"     selfDev: {selfDev} (default)")
-
     if (not options.target):
         print (f"Error: Missing --target")
         sys.exit (-1)
-
     if options.ipv4 and options.use_gw:
         print (f"Error: Cannot combine option '--use-gw' with '--ipv4' option")
         sys.exit (-1)
-
     if (options.vci):
         connVCI = options.vci
-
     if (connVCI != "0" and connVCI != "1" and connVCI != "2"):
         print (f"Error: Invalid vci {connVCI}")
         sys.exit (-1)
@@ -153,7 +153,6 @@ def setUpModule():
     else:
         print (f"Error: Bad --target='{options.target}'")
         sys.exit (-1)
-
     for tt in targ:
         if (len(tt) == 1):
             peerMacL = f"{peerMacL}:0{tt}"
@@ -170,11 +169,9 @@ def setUpModule():
         peerHost = peerHostname (peerMacL)
     else:
         print (f"--no-remote: skipping ssh remote '{peerHost}'")
-
     if (peerHost == selfHost):
         print (f"Error: Self --target='{options.target}'")
         sys.exit (-1)
-
     if os.path.exists ("/dev/noc_debug"):
         po = subprocess.run (['file', '/dev/noc_debug'],
                              stdout=subprocess.PIPE).stdout.decode().strip()
@@ -183,7 +180,6 @@ def setUpModule():
             print (f"Error: 'self' /dev/noc_debug not 'char' dev (446/0)\n"
                    "HINT: '/dev/noc_debug' may be a plain text file - remove it")
             sys.exit (-1)
-
     if peerHost:
         po = subprocess.run (['ssh', peerHost, 'ls', '/dev/noc_debug', '2>/dev/null'],
                              stdout=subprocess.PIPE).stdout.decode().strip()
@@ -202,7 +198,6 @@ def setUpModule():
     except FileExistsError as e:
         print (f"Error: selfHost already locked ({selfLock} exists)")
         sys.exit (-1)
-
     if peerHost:
         peerLock = f"/mnt/mac/.locks/ttp-host-lock-{peerHost}"
         try:
@@ -211,7 +206,6 @@ def setUpModule():
             print (f"Error: {peerHost} already locked ({peerLock} exists)")
             os.remove (selfLock)
             sys.exit (-1)
-
     if verbose:
         print (f"   Self Host: {selfHost}")
         print (f"    MAC addr: {selfMac}")
@@ -223,7 +217,6 @@ def setUpModule():
         else:
             if verbose == 2:
                 print (f"    Conn VCI: 0 (default)")
-
     if (options.peer_dev):
         peerDev = options.peer_dev
         if verbose:
@@ -234,7 +227,6 @@ def setUpModule():
         peerDev = getDefaultEthDev()
     if verbose:
         print (f"     PeerDev: {peerDev} (default)")
-
     if peerHost:
         rv = os.system (f"ssh {peerHost} 'ifconfig {peerDev} 1>/dev/null'")
         if (rv != 0):
@@ -242,58 +234,60 @@ def setUpModule():
             os.remove (selfLock)
             os.remove (peerLock)
             sys.exit (-1)
-
     if (options.no_load):
         print (f"Skipping local module reload in setup:-")
     else:
         rv = os.system (f"sudo insmod /mnt/mac/modttpoe.ko"
-                        f" verbose={verbose} dev={selfDev}")
+                        f" verbose={verbose} dev={selfDev} ipv4={ipv4Arg}")
         if (rv != 0):
             print (f"Error: 'insmod modttpoe' on 'self' failed")
             os.remove (selfLock)
             os.remove (peerLock)
             sys.exit (-1)
-
-        if options.ipv4:
-            os.system (f"echo 1 | sudo tee {modpath}/encap 1>/dev/null")
-            os.system (f"echo 10 | sudo tee {modpath}/prefix 1>/dev/null")
         if verbose:
-            print (f"  IPv4 Encap: {options.ipv4}")
-            pf = open (f"/sys/module/modttpoe/parameters/encap", "r")
+            if verbose == 2:
+                print (f" Use Gateway: {options.use_gw}")
+            elif options.use_gw:
+                print (f" Use Gateway: True")
+        if options.ipv4:
+            os.system (f"echo 10.0.0.0/8 | sudo tee {modpath}/prefix 1>/dev/null")
+        if verbose:
+            pf = open (f"/sys/module/modttpoe/parameters/ipv4", "r")
             pfo = int (pf.read().strip())
             pf.close()
             if pfo:
                 print (f"   TTP Encap: ipv4 (etype: 0x0800)")
             else:
                 print (f"   TTP Encap: ttpoe (etype: 0x9ac6)")
+        if verbose and options.ipv4:
             pf = open (f"/sys/module/modttpoe/parameters/prefix", "r")
             pfo = pf.read().strip()
             pf.close()
             print (f" IPv4 Prefix: {pfo}")
-
-        # set vc (first) and target on 'self'
-        if options.vci:
-            rv = os.system (f"echo {connVCI} |"
-                            f" sudo tee {modpath}/vci 1>/dev/null")
+        if options.ipv4: # set target to allow nhmac to resolve below
+            if options.vci: # set 'vc' before setting 'target'
+                rv = os.system (f"echo {connVCI} | sudo tee {modpath}/vci 1>/dev/null")
+                if (rv != 0):
+                    print (f"Error: Set vci on 'self' failed")
+                    tearDownModule()
+                    sys.exit (-1)
+            rv = os.system (f"echo {peerMacA} | sudo tee {modpath}/target 1>/dev/null")
             if (rv != 0):
-                print (f"Error: Set vci on 'self' failed")
+                print (f"Error: Set target on 'self' failed")
                 tearDownModule()
                 sys.exit (-1)
 
-        if verbose and not options.ipv4:
-            print (f" Use Gateway: {options.use_gw}")
         lct = 10
-        while (options.use_gw and lct):
-            pf = open (f"/sys/module/modttpoe/parameters/gwmac", "r")
-            gwmac = pf.read().strip()
+        while ((options.use_gw or options.ipv4) and lct):
+            pf = open (f"/sys/module/modttpoe/parameters/nhmac", "r")
+            nhmac = pf.read().strip()
             pf.close()
             if verbose == 2:
-                print (f"?GW MAC addr: {gwmac}")
-            if gwmac == "00:00:00:00:00:00":
+                print (f"?GW MAC addr: {nhmac}")
+            if nhmac == "00:00:00:00:00:00":
                 time.sleep (1)
                 lct = lct - 1
                 continue
-
             rv = os.system (f"echo 1 |"
                             f" sudo tee {modpath}/use_gw 1>/dev/null")
             if (rv != 0):
@@ -301,26 +295,33 @@ def setUpModule():
                 tearDownModule()
                 sys.exit (-1)
             break
-
         if lct == 0:
-            print (f"Error: Detect gateway on 'self' failed")
+            if options.ipv4:
+                print (f"Error: Detect next-hop-mac on 'self' failed")
+            else:
+                print (f"Error: Detect gateway-mac on 'self' failed")
             tearDownModule()
             sys.exit (-1)
         if verbose:
-            pf = open (f"/sys/module/modttpoe/parameters/gwmac", "r")
-            gwmac = pf.read().strip()
+            pf = open (f"/sys/module/modttpoe/parameters/nhmac", "r")
+            nhmac = pf.read().strip()
             pf.close()
             if options.use_gw:
-                print (f" GW MAC addr: {gwmac}")
+                print (f"   GW nh-mac: {nhmac}")
             elif options.ipv4:
-                print (f" IPv4 nh MAC: <dynamic-neigh-lookup>")
-
-        rv = os.system (f"echo {peerMacA} |"
-                        f" sudo tee {modpath}/target 1>/dev/null")
-        if (rv != 0):
-            print (f"Error: Set target on 'self' failed")
-            tearDownModule()
-            sys.exit (-1)
+                print (f" IPv4 nh-mac: {nhmac}")
+        if not options.ipv4: # set target after nhmac resolve above
+            if options.vci: # set 'vc' before setting 'target'
+                rv = os.system (f"echo {connVCI} | sudo tee {modpath}/vci 1>/dev/null")
+                if (rv != 0):
+                    print (f"Error: Set vci on 'self' failed")
+                    tearDownModule()
+                    sys.exit (-1)
+            rv = os.system (f"echo {peerMacA} | sudo tee {modpath}/target 1>/dev/null")
+            if (rv != 0):
+                print (f"Error: Set target on 'self' failed")
+                tearDownModule()
+                sys.exit (-1)
 
     tagSeqi = int(subprocess.run (["cat", f"{modpath}/tag_seq"],
                                   stdout=subprocess.PIPE).stdout.decode().strip())
@@ -330,14 +331,12 @@ def setUpModule():
             print (f"     Tag Seq: {tagSeqi} (override)")
     elif verbose == 2:
         print (f"     Tag Seq: {tagSeqi} (default)")
-
     if (options.no_load):
         print (f"Skipping peer module reload in setup:-")
     else:
         if peerHost:
-            rv = os.system (f"ssh {peerHost}"
-                            f" 'sudo insmod /mnt/mac/modttpoe.ko"
-                            f" verbose={verbose} dev={peerDev}'")
+            rv = os.system (f"ssh {peerHost} 'sudo insmod /mnt/mac/modttpoe.ko"
+                            f" verbose={verbose} dev={peerDev} ipv4={ipv4Arg}'")
             if (rv != 0):
                 print (f"Error: 'insmod modttpoe' on 'peer' failed")
                 os.system ("sudo rmmod modttpoe 1>/dev/null")
@@ -349,31 +348,9 @@ def setUpModule():
         else:
             time.sleep (0.5) # to allow peer module to settle down
         if options.ipv4:
-            os.system (f"ssh {peerHost} 'echo 1 |"
-                       f" sudo tee {modpath}/encap 1>/dev/null'")
-            os.system (f"ssh {peerHost} 'echo 10 |"
+            os.system (f"ssh {peerHost} 'echo 10.0.0.0/8 |"
                        f" sudo tee {modpath}/prefix 1>/dev/null'")
-
-    # to test setting peer target.vci in setup-module (change 0 --> 1 to enable)
-    if (0):
-        # set vc (first) and target on 'peer'
-        if options.vci:
-            if peerHost:
-                rv = os.system (f"ssh {peerHost} 'echo {connVCI} |"
-                                f" sudo tee {modpath}/vci 1>/dev/null'")
-                if (rv != 0):
-                    print (f"Error: Set vci {connVCI} on 'peer' failed")
-                    tearDownModule()
-                    sys.exit (-1)
-            rv = os.system (f"ssh {peerHost} 'echo {selfMacA} |"
-                        f" sudo tee {modpath}/target 1>/dev/null'")
-            if (rv != 0):
-                print (f"Error: Set target {selfMacA} on 'peer' failed")
-                tearDownModule()
-                sys.exit (-1)
-
-    # exit early control (change 0 --> 1 to enable)
-    if (0):
+    if (0): # exit early control (change 0 --> 1 to enable)
         if verbose:
             print (f"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
             tearDownModule()
@@ -385,7 +362,6 @@ def tearDownModule():
         print (f"**** Waiting 10 sec before tear-down:-\n"
                f" Hit ^C to stop and examine state before modules are unloaded")
         time.sleep (10)
-
     if (options.no_unload):
         print (f"Skipping local and peer module unload in tear-down:-")
     else:
@@ -395,6 +371,7 @@ def tearDownModule():
     os.remove (selfLock)
     if peerHost:
         os.remove (peerLock)
+
 
 # This "Test0_Seq_IDs" test-suite needs to be the first test to run, as it checks RX
 # and TX seq-IDs which depend on how many payloads were sent and received.
@@ -414,7 +391,6 @@ class Test0_Seq_IDs (unittest.TestCase):
     def test2_tx1_seq (self):
         if (options.no_load):
             self.skipTest (f"requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -458,12 +434,9 @@ class Test0_Seq_IDs (unittest.TestCase):
     def test3_rx1_seq (self):
         if (options.no_load):
             self.skipTest (f"requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
-
-        # set vc (first) and target on 'peer'
-        if options.vci:
+        if options.vci: # set 'vc' before setting 'target'
             rv = os.system (f"ssh {peerHost} 'echo {connVCI} "
                             f" | sudo tee {modpath}/vci 1>/dev/null'")
             if (rv != 0):
@@ -546,7 +519,6 @@ class Test1_Proc (unittest.TestCase):
     def test3_debug__500 (self):
         if (options.no_load):
             self.skipTest (f"requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -559,12 +531,10 @@ class Test1_Proc (unittest.TestCase):
         if x != 0:
             self.fail (f"received file did not match sent file '500'")
 
-
     #@unittest.skip ("<comment>")
     def test4_debug_1000 (self):
         if (options.no_load):
             self.skipTest ("requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -577,12 +547,10 @@ class Test1_Proc (unittest.TestCase):
         if x != 0:
             self.fail (f"received file did not match sent file '1000'")
 
-
     #@unittest.skip ("<comment>")
     def test5_debug_2000 (self):
         if (options.no_load):
             self.skipTest (f"requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -595,12 +563,10 @@ class Test1_Proc (unittest.TestCase):
         if x != 0:
             self.fail (f"received file did not match sent file '2000'")
 
-
     #@unittest.skip ("<comment>")
     def test6_debug_3000 (self):
         if (options.no_load):
             self.skipTest (f"requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -613,12 +579,10 @@ class Test1_Proc (unittest.TestCase):
         if x != 0:
             self.fail (f"received file did not match sent file '3000'")
 
-
     #@unittest.skip ("<comment>")
     def test7_debug_4000 (self):
         if (options.no_load):
             self.skipTest (f"requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -638,7 +602,6 @@ class Test2_Packet (unittest.TestCase):
     def test1_get_open (self):
         if (options.no_packet):
             self.skipTest (f"no packet tests")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -673,7 +636,6 @@ class Test2_Packet (unittest.TestCase):
     def test2_snd_open (self):
         if (options.no_packet):
             self.skipTest (f"no packet tests")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -707,7 +669,6 @@ class Test2_Packet (unittest.TestCase):
     def test3_get_pyld (self):
         if (options.no_packet):
             self.skipTest (f"no packet tests")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -752,7 +713,6 @@ class Test2_Packet (unittest.TestCase):
     def test4_snd_pyld (self):
         if (options.no_packet):
             self.skipTest (f"no packet tests")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -796,16 +756,12 @@ class Test2_Packet (unittest.TestCase):
     def test5_get_clos (self):
         if options.ipv4:
             self.skipTest (f"--ipv4 specified")
-
         if (options.no_packet):
             self.skipTest (f"--no-packet specified")
-
         if (options.use_gw):
             self.skipTest (f"--use_gw specified")
-
         if (options.no_load):
             self.skipTest (f"requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -840,16 +796,12 @@ class Test2_Packet (unittest.TestCase):
     def test6_snd_clos (self):
         if options.ipv4:
             self.skipTest (f"--ipv4 specified")
-
         if (options.no_packet):
             self.skipTest (f"--no-packet specified")
-
         if (options.use_gw):
             self.skipTest (f"--use_gw specified")
-
         if (options.no_load):
             self.skipTest (f"requires module reload")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -886,7 +838,6 @@ class Test3_Noc_db (unittest.TestCase):
     def test1_show_tag (self):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
-
         if verbose == 2:
             print()
             os.system (f"cat {procpath}/tags")
@@ -918,7 +869,6 @@ class Test4_Traffic (unittest.TestCase):
     def test1_traffic (self):
         if (options.no_traffic):
             self.skipTest (f"no traffic")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -930,14 +880,12 @@ class Test4_Traffic (unittest.TestCase):
     def test2_traffic (self):
         if (options.no_traffic):
             self.skipTest (f"no traffic")
-
         if (options.traffic):
             ra = int(options.traffic)
             if (ra < 0 or ra > 10):
                 ra = 10
         else:
             ra = 10
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -951,10 +899,8 @@ class Test4_Traffic (unittest.TestCase):
     def test3_traffic (self):
         if (options.no_traffic):
             self.skipTest (f"no traffic")
-
         if (options.traffic):
             self.skipTest (f"no big traffic")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -967,10 +913,8 @@ class Test4_Traffic (unittest.TestCase):
     def test4_traffic (self):
         if (options.no_traffic):
             self.skipTest (f"no traffic")
-
         if (options.traffic):
             self.skipTest (f"no big traffic")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -983,10 +927,8 @@ class Test4_Traffic (unittest.TestCase):
     def test5_traffic (self):
         if (options.no_traffic):
             self.skipTest (f"no traffic")
-
         if (options.traffic):
             self.skipTest (f"no big traffic")
-
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 

@@ -45,6 +45,7 @@ zutm = [0x21, 0x22, 0x23, 0x24] # utm  nodes (--utm)
 totn = 0
 runs = []
 ktst = ""
+encp = ""
 
 # Unicode stop, play, pause icons
 done = '⏹'
@@ -111,7 +112,7 @@ def setup_test():
                 for ri in runs:
                     if not options.quiet:
                         print ("(ssh node-%02x /mnt/mac/tests/run.sh --target=%02x"
-                               f" --use-gw {ktst} 2>/dev/null 1>/dev/null"
+                               f" {encp} {ktst} 2>/dev/null 1>/dev/null"
                                " && echo '  %d: node-%02x <-> node-%02x"
                                f" [{green}ok{clear}]'"
                                " || echo '  %d: node-%02x <-> node-%02x"
@@ -122,7 +123,7 @@ def setup_test():
                                   "&" if prll else ""))
                     else:
                         print ("(ssh node-%02x /mnt/mac/tests/run.sh --target=%02x"
-                               f" --use-gw {ktst} 2>/dev/null 1>/dev/null) %s"
+                               f" {encp} {ktst} 2>/dev/null 1>/dev/null) %s"
                                % (ri[0], ri[1], "&" if prll else ""))
                 if prll:
                     if not options.quiet:
@@ -173,6 +174,8 @@ if __name__ == '__main__':
                          help='clears screen before each run')
     parser.add_argument ('-d', '--dry', action='store_true',
                          help='dry-run: saves cmd file (ignores --num/-n)')
+    parser.add_argument ('-i', '--ipv4', action='store_true',
+                         help='use ipv4 encap with routing (no gw)')
     parser.add_argument ('-m', '--min', action='store_true',
                          help='minimum test: \'just run: -k Test0\'')
     parser.add_argument ('-n', '--num',
@@ -219,6 +222,11 @@ if __name__ == '__main__':
 
     if options.min:
         ktst = "-k Test0"
+
+    if options.ipv4:
+        encp = "--ipv4"
+    else:
+        encp = "--use-gw"
 
     # begin
     subprocess.run (["clear"]) if clrs else None

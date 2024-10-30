@@ -123,14 +123,14 @@ int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_noc_host *tg)
     mac[4] = ttp_debug_source.mac[4];
     mac[5] = ttp_debug_source.mac[5];
 
-    skid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_encap_ipv4);
+    skid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_ipv4_encap);
 
     /* dest mac */
     mac[3] = tg->mac[3];
     mac[4] = tg->mac[4];
     mac[5] = tg->mac[5];
 
-    lkid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_encap_ipv4);
+    lkid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_ipv4_encap);
 
     /* check source kid == target kid */
     if (skid == lkid) {

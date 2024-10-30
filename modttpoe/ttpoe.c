@@ -65,6 +65,7 @@
 #include <linux/netdevice.h>
 #include <linux/inet.h>
 #include <linux/etherdevice.h>
+#include <linux/inetdevice.h>
 #include <linux/types.h>
 #include <linux/bitops.h>
 #include <linux/cred.h>
@@ -99,22 +100,16 @@ u32 Tesla_Mac_Oui;
 int ttp_shutdown = 1; /* 'DOWN' by default - enabled at init after checking */
 
 char *ttp_dev;
-u32   ttp_prefix;
-int   ttp_encap_ipv4;
+u32   ttp_ipv4_prefix;
+u32   ttp_ipv4_pfxlen;
+int   ttp_ipv4_encap;
 
 static int ttpoe_skb_recv_func (struct sk_buff *, struct net_device *dev,
                                 struct packet_type *pt, struct net_device *odev);
 
 struct packet_type ttpoe_etype_tesla __read_mostly = {
-    .dev  = NULL,               /* set via module-param */
-    .type = htons (TESLA_ETH_P_TTPOE),
-    .func = ttpoe_skb_recv_func,
-    .ignore_outgoing = true,
-};
-
-struct packet_type ttpoe_etype_ipv4 __read_mostly = {
-    .dev  = NULL,               /* set via module-param */
-    .type = htons (ETH_P_IP),
+    .dev  = NULL,                      /* set via module-param 'dev' */
+    .type = htons (TESLA_ETH_P_TTPOE), /* can change via module-param 'ipv4' at init */
     .func = ttpoe_skb_recv_func,
     .ignore_outgoing = true,
 };
@@ -233,12 +228,11 @@ static bool ttp_tsk_move (struct ttp_fsm_event *ev, struct sk_buff **skb)
 }
 
 
-static void ttp_setup_ethhdr (struct ethhdr *eth,
-                              const u8 *dmac_low, const u8 *gwmac)
+static void ttp_setup_ethhdr (struct ethhdr *eth, const u8 *dmac_low, const u8 *nhmac)
 {
     eth->h_proto = htons (TESLA_ETH_P_TTPOE);
 
-    BUG_ON (!(eth && (dmac_low || gwmac)));
+    BUG_ON (!(eth && (dmac_low || nhmac)));
 
     memmove (eth->h_source, ttpoe_etype_tesla.dev->dev_addr, ETH_ALEN);
 
@@ -250,8 +244,8 @@ static void ttp_setup_ethhdr (struct ethhdr *eth,
         eth->h_dest[4] = dmac_low[1];
         eth->h_dest[5] = dmac_low[2];
     }
-    else if (gwmac) {
-        memmove (eth->h_dest, gwmac, ETH_ALEN);
+    else if (nhmac) {
+        memmove (eth->h_dest, nhmac, ETH_ALEN);
     }
 }
 
@@ -367,6 +361,7 @@ static int ttpoe_parse_check (struct sk_buff *skb)
 
 int ttp_skb_dequ (void)
 {
+    u32 src_node;
     bool gw = false;
     bool t4 = false;
     struct sk_buff *skb;
@@ -437,9 +432,8 @@ int ttp_skb_dequ (void)
         }
     }
     else if (t4) { /* ipv4-encap mode */
-        u32 sip = frh.ip4->saddr >> 8;
-
-        ttp_mac_from_shim (mac, (u8 *)&sip);
+        src_node = frh.ip4->saddr & ~inet_make_mask (ttp_ipv4_pfxlen); /* get host part */
+        ttp_mac_from_shim (mac, (u8 *)&src_node + 1);
         ev->kid = ttp_tag_key_make (mac, frh.ttp->conn_vc, false, true);
         if (ttp_verbose > 1) {
             TTP_DBG ("%s: 0x%016llx (ipv4) dst:%pI4 <- src:%pI4\n", __FUNCTION__,
@@ -462,75 +456,89 @@ int ttp_skb_dequ (void)
 }
 
 
+static bool ttp_ipv4_resolve_mac (u32 ip4)
+{
+    bool rv = false;
+    struct flowi4 fl4;
+    struct rtable *rt4 = NULL;
+    struct neighbour *neigh = NULL;
+
+    memset (&fl4, 0, sizeof fl4);
+    fl4.daddr = ip4;
+    if (IS_ERR (rt4 = ip_route_output_key (&init_net, &fl4))) {
+        TTP_LOG ("%s: Error: route lookup failed: ttp-gw:%pI4\n", __FUNCTION__, &ip4);
+        rt4 = NULL;
+        goto end;
+    }
+    if ((rt4->dst.dev->flags & IFF_LOOPBACK) || (!(rt4->dst.dev->flags & IFF_UP))) {
+        TTP_LOG ("%s: Error: dev lookup failed: %s is %s\n", __FUNCTION__,
+                 rt4->dst.dev->name,
+                 rt4->dst.dev->flags & IFF_LOOPBACK ? "LOOPBACK" : "!UP");
+        goto end;
+    }
+    if (!(neigh = dst_neigh_lookup (&rt4->dst, &ip4))) {
+        TTP_LOG ("%s: Error: neighbor lookup failed: nh-ip4:%pI4\n", __FUNCTION__, &ip4);
+        goto end;
+    }
+    if (!is_valid_ether_addr (neigh->ha)) {
+        if (ttp_verbose) {
+            TTP_DBG ("`-> Failed to get mac for dip:%pI4\n", &ip4);
+        }
+        goto end;
+    }
+    ether_addr_copy (ttp_nhmac, neigh->ha);
+    rv = true;
+
+end:
+    if (rt4) {
+        dst_release (&rt4->dst);
+    }
+    if (neigh) {
+        neigh_release (neigh);
+    }
+    return rv;;
+}
+
+
 /* sets up ipv4 encap info, returns true on success; false on failure - no drops */
 static bool ttp_ipv4_encap_setup (struct sk_buff *skb)
 {
-    u8 *byt;
-    struct flowi4 fl4;
-    struct rtable *rt4;
     struct iphdr ip4 = {0};
     struct ttp_frame_hdr frh;
-    struct neighbour *neigh;
 
-    if (!ttp_prefix) {
-        TTP_LOG ("%s: <<- Tx frame dropped: ttp_prefix is not set\n", __FUNCTION__);
+    if (!ttp_ipv4_prefix) {
+        TTP_LOG ("%s: <<- Tx frame dropped: ipv4 'prefix' not set\n", __FUNCTION__);
         goto end;
     }
     skb->protocol = htons (ETH_P_IP);
     ttp_skb_pars (skb, &frh, NULL);
 
-    /* set sip from smac[23:0] */
-    byt = (u8 *)&ip4.saddr + 1;
-    memcpy (byt, &frh.eth->h_source[3], ETH_ALEN/2);
-    ip4.saddr = htonl (ntohl (ttp_prefix) | ntohl (ip4.saddr));
+    /* set ip4.saddr from smac[23:0] in network order */
+    memcpy ((u8 *)&ip4.saddr + 1, &frh.eth->h_source[3], ETH_ALEN/2);
+    ip4.saddr &= ~inet_make_mask (ttp_ipv4_pfxlen); /* retain host part */
+    ip4.saddr |= ttp_ipv4_prefix;
 
-    /* set dip from dmac[23:0] */
-    byt = (u8 *)&ip4.daddr + 1;
-    memcpy (byt, &frh.eth->h_dest[3], ETH_ALEN/2);
-    ip4.daddr = htonl (ntohl (ttp_prefix) | ntohl (ip4.daddr));
+    /* set ip4.daddr from dmac[23:0] in network order */
+    memcpy ((u8 *)&ip4.daddr + 1, &frh.eth->h_dest[3], ETH_ALEN/2);
+    ip4.daddr &= ~inet_make_mask (ttp_ipv4_pfxlen); /* retain host part */
+    ip4.daddr |= ttp_ipv4_prefix;
 
     /* prepare IP header from ip4 */
     if (ttp_prepare_ipv4 ((u8 *)frh.ip4, ntohs (frh.tsh->length), ip4.saddr, ip4.daddr)) {
-        ether_addr_copy (frh.eth->h_dest, ttp_gwmac);
+        ether_addr_copy (frh.eth->h_dest, ttp_nhmac);
         frh.eth->h_proto = skb->protocol;
 
-        memset (&fl4, 0, sizeof fl4);
-        fl4.daddr = ip4.daddr;
-        if (IS_ERR (rt4 = ip_route_output_key (&init_net, &fl4))) {
-            TTP_LOG ("%s: Error: route lookup failed: ttp-gw:%pI4\n", __FUNCTION__,
-                     &ip4.daddr);
-            goto end;
-        }
-        if ((rt4->dst.dev->flags & IFF_LOOPBACK) || (!(rt4->dst.dev->flags & IFF_UP))) {
-            TTP_LOG ("%s: Error: dev lookup failed: %s is %s\n", __FUNCTION__,
-                     rt4->dst.dev->name,
-                     rt4->dst.dev->flags & IFF_LOOPBACK ? "LOOPBACK" : "!UP");
-            dst_release (&rt4->dst);
-            goto end;
-        }
-        if (!(neigh = dst_neigh_lookup (&rt4->dst, &ip4.daddr))) {
-            TTP_LOG ("%s: Error: neighbor lookup failed: nh-ip4:%pI4\n", __FUNCTION__,
-                     &ip4.daddr);
-            dst_release (&rt4->dst);
-            goto end;
-        }
-        dst_release (&rt4->dst);
-        if (!is_valid_ether_addr (neigh->ha)) {
-            if (ttp_verbose) {
-                TTP_DBG ("`-> Failed to get mac for dip:%pI4\n", &ip4.daddr);
+        if (!is_valid_ether_addr (ttp_nhmac)) {
+            if (!ttp_ipv4_resolve_mac (ip4.daddr)) {
+                return false;
             }
-            neigh_release (neigh);
-            goto end;
+            ether_addr_copy (frh.eth->h_dest, ttp_nhmac);
+            if (ttp_verbose > 1) {
+                TTP_DBG ("%s: resolved ip:%pI4 -> %*phC \n", __FUNCTION__, &ip4.daddr,
+                         ETH_ALEN, ttp_nhmac);
+            }
         }
-        if (ttp_verbose > 1) {
-            TTP_DBG ("`-> Got dip:%pI4 mac:%*phC\n", &ip4.daddr, ETH_ALEN, neigh->ha);
-        }
-        ether_addr_copy (ttp_gwmac, neigh->ha);
-        ether_addr_copy (frh.eth->h_dest, neigh->ha);
-        neigh_release (neigh);
-
         TTP_DBG ("%s: skb-len:%d\n", __FUNCTION__, skb->len);
-
         return true;
     }
 
@@ -574,8 +582,8 @@ static bool ttp_skb_net_setup (struct sk_buff *skb, struct ttp_link_tag *lt, u16
         if (lt) {
             ttp_setup_ethhdr (frh.eth, lt->mac, NULL);
         }
-        else if (is_valid_ether_addr (ttp_gwmac)) {
-            ttp_setup_ethhdr (frh.eth, NULL, ttp_gwmac);
+        else if (is_valid_ether_addr (ttp_nhmac)) {
+            ttp_setup_ethhdr (frh.eth, NULL, ttp_nhmac);
         }
         else {
             return false;
@@ -583,11 +591,11 @@ static bool ttp_skb_net_setup (struct sk_buff *skb, struct ttp_link_tag *lt, u16
         /* not printing eth-hdr here as it will be overwritten in ipv4-encap-setup */
     }
     else if (gw) { /* via ttp-gw */
-        if (!is_valid_ether_addr (ttp_gwmac)) {
-            TTP_LOG ("%s: Drop tx-frame: gwmac unknown\n", __FUNCTION__);
+        if (!is_valid_ether_addr (ttp_nhmac)) {
+            TTP_LOG ("%s: Drop tx-frame: nhmac unknown\n", __FUNCTION__);
             return false;
         }
-        ttp_setup_ethhdr (frh.eth, NULL, ttp_gwmac);
+        ttp_setup_ethhdr (frh.eth, NULL, ttp_nhmac);
         ttp_print_eth_hdr (frh.eth);
     }
     else if (lt) { /* raw ethernet */
@@ -640,7 +648,7 @@ bool ttp_skb_prep (struct sk_buff **skbp, struct ttp_fsm_event *qev,
         ttp_skb_drop (skb);
         return false;
     }
-    if (ttp_encap_ipv4) { /* ipv4 encap mode */
+    if (ttp_ipv4_encap) { /* ipv4 encap mode */
         if (!ttp_ipv4_encap_setup (skb)) {
             ttp_skb_drop (skb);
             return false;
@@ -680,7 +688,12 @@ static int ttpoe_skb_recv (struct sk_buff *skb)
     if (!skb) {
         return 0;
     }
-    if (ttp_encap_ipv4) {
+    if (ttp_ipv4_encap) {
+        if (!ttp_ipv4_prefix) {
+            TTP_LOG ("%s: ->> Rx frame dropped: ipv4 'prefix' not set\n", __FUNCTION__);
+            ttp_skb_drop (skb);
+            return 0;
+        }
         if (ttp_verbose > 2) {
             TTP_DBG ("%s: ->> Rx frame: len:%d dev:%s\n", __FUNCTION__,
                      skb->len, skb->dev->name);
@@ -714,15 +727,15 @@ static int ttpoe_skb_recv (struct sk_buff *skb)
                      skb->len, skb->dev->name);
             ttpoe_parse_print (skb, TTP_RX);
         }
-        if (!ether_addr_equal (ttp_gwmac, eth->h_source)) {
+        if (!ether_addr_equal (ttp_nhmac, eth->h_source)) {
             if (ttp_verbose <= 2) {
-                TTP_DBG ("%s: Learnt gwmac:%*phC\n", __FUNCTION__,
+                TTP_DBG ("%s: Learnt nhmac:%*phC\n", __FUNCTION__,
                          ETH_ALEN, eth->h_source);
             }
-            ether_addr_copy (ttp_gwmac, eth->h_source);
+            ether_addr_copy (ttp_nhmac, eth->h_source);
         }
         if (ttp_verbose > 2) {
-            TTP_DBG ("%s: Learnt gwmac:%*phC\n", __FUNCTION__, ETH_ALEN, eth->h_source);
+            TTP_DBG ("%s: Learnt nhmac:%*phC\n", __FUNCTION__, ETH_ALEN, eth->h_source);
             TTP_DBG ("%s: <<- Tx (gw-ctrl) frame: len:%d dev:%s\n", __FUNCTION__,
                      skb->len, skb->dev->name);
         }
@@ -826,18 +839,14 @@ static int __init ttpoe_init (void)
     ttp_fsm_init ();
 
     me = ttp_tag_key_make (ttpoe_etype_tesla.dev->dev_addr, 0, false, false);
-    TTP_DBG ("ttp-source:%*phC [0x%016llx] device:%s\n",
+    TTP_DBG ("init: ttp-source:%*phC mytag:[0x%016llx]\n"
+             "       dev:%s nhmac:%*phC ipv4:%d\n",
              ETH_ALEN, ttpoe_etype_tesla.dev->dev_addr,
-             cpu_to_be64 (me), ttpoe_etype_tesla.dev->name);
+             cpu_to_be64 (me), ttpoe_etype_tesla.dev->name,
+             ETH_ALEN, ttp_nhmac, ttp_ipv4_encap);
+
     ether_addr_copy (ttp_debug_source.mac, ttpoe_etype_tesla.dev->dev_addr);
-
     dev_add_pack (&ttpoe_etype_tesla);
-
-    if (ttp_encap_ipv4) {
-        /* register a handler to handle ip-encap frames */
-        ttpoe_etype_ipv4.dev = ttpoe_etype_tesla.dev;
-        dev_add_pack (&ttpoe_etype_ipv4);
-    }
 
     TTP_EVLOG (NULL, TTP_LG__TTP_INIT, TTP_OP__invalid);
 
@@ -852,12 +861,7 @@ TTP_NOINLINE
 static void __exit ttpoe_exit (void)
 {
     ttp_shutdown = 1;
-
-    if (ttp_encap_ipv4) {
-        dev_remove_pack (&ttpoe_etype_ipv4);
-    }
     dev_remove_pack (&ttpoe_etype_tesla);
-
     ttp_fsm_exit ();
     ttpoe_noc_debug_exit ();
     ttpoe_proc_exit ();

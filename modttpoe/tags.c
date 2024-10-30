@@ -83,17 +83,7 @@ struct ttp_link_tag  ttp_link_tag_tbl_2[TTP_TAG_TBL_SIZE][TTP_TAG_TBL_BKTS_NUM];
 
 struct ttp_stats_all ttp_stats;
 
-static int ttp_tag_seq_init_val = 1; /* can be any value (try: test with other values) */
-
-static const struct kernel_param_ops ttp_param_tag_seq_ops = {
-    .set = param_set_int,
-    .get = param_get_int,
-};
-
-/* read-only parameter; must be set at module-load */
-module_param_cb (tag_seq, &ttp_param_tag_seq_ops, &ttp_tag_seq_init_val, 0444);
-MODULE_PARM_DESC (tag_seq, "  starting value of tag seq number (default=1)");
-
+int ttp_tag_seq_init_val = 1; /* can be any value (try: test with other values) */
 
 TTP_NOTRACE
 static u8 ttp_tag_index_hash_get (u64 kid)

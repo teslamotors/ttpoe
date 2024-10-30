@@ -43,9 +43,8 @@
  */
 
 #define TTPOE_PRBUF_MAX       1024
-#define TTP_SKB(bb,ll)  ttpoe_pretty_print_data ("skb: ", 16, (bb), (ll))
-#define TTP_RAW(bb,ll)  ttpoe_pretty_print_data ("raw: ", 16, (bb), (ll))
-#define TTP_RWS(bb,ll)  ttpoe_pretty_print_data ("raw: ", 16, (bb), ((ll)>16 ? 16:(ll)))
+#define TTP_RAW(bb,ll)  ttpoe_pretty_print_data (" raw: ", 16, (bb), (ll))
+#define TTP_RWS(bb,ll)  ttpoe_pretty_print_data (" raw: ", 16, (bb), ((ll)>16 ? 16:(ll)))
 
 extern char *ttp_opcode_names[];
 #define TTP_OPCODE_NAME(nm)                                 \

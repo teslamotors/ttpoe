@@ -44,16 +44,16 @@
 
 #define TESLA_TTP_OVER_IPV4   1  /* if 1: 'ttp-o-ipv4'; always: 'ttp-o-ethernet' */
 
-extern u32 ttp_prefix;
-extern int ttp_encap_ipv4;
-extern u8  ttp_gwmac[ETH_ALEN];
+extern u32 ttp_ipv4_prefix;
+extern u32 ttp_ipv4_pfxlen;
+extern int ttp_ipv4_encap;
+extern u8  ttp_nhmac[ETH_ALEN];
 
 #define TTP_NOC_BUF_SIZE  (1024) /* Size of NOC buffer, including NOC Header + Data */
 #define TTP_NOC_DAT_SIZE  (TTP_NOC_BUF_SIZE - sizeof (struct ttp_ttpoe_noc_hdr))
 #define TTP_NOC_NUM_64B   (TTP_NOC_DAT_SIZE / sizeof (u64))
 
 extern struct packet_type ttpoe_etype_tesla;
-extern struct packet_type ttpoe_etype_ipv4;
 
 enum ttp_frame_direction {
     TTP_RX = 0,
