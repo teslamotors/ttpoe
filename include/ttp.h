@@ -51,10 +51,10 @@
 #define TESLA_MAC_OUI2    0x5c
 #define TESLA_MAC_OUI     ((TESLA_MAC_OUI0<<16) | (TESLA_MAC_OUI1<<8) | TESLA_MAC_OUI2)
 
-extern u8  Tesla_Mac_Oui0;
-extern u8  Tesla_Mac_Oui1;
-extern u8  Tesla_Mac_Oui2;
-extern u32 Tesla_Mac_Oui; /* 3-bytes in host order: (mac[0]<<16)|(mac[1]<<8)|mac[2]) */
+extern const u8  Tesla_Mac_Oui0;
+extern const u8  Tesla_Mac_Oui1;
+extern const u8  Tesla_Mac_Oui2;
+extern const u32 Tesla_Mac_Oui; /* 3-bytes in host order: (mac[0]<<16)|(mac[1]<<8)|mac[2]) */
 
 #define TTP_MIN_FRAME_LEN ((u16)64)   /* Ethernet minimum frame len */
 #define TTP_MAX_FRAME_LEN ((u16)1536) /* Ethernet MAXimum frame len */
@@ -80,9 +80,17 @@ extern u32 Tesla_Mac_Oui; /* 3-bytes in host order: (mac[0]<<16)|(mac[1]<<8)|mac
 #define NOCOLOR  ""
 
 #ifdef __KERNEL__
-#  define TTP_DBG(a...)    printk (KERN_DEBUG   TTP_PREFIX a)
+#  define TTP_DBv(vl, a...)                   \
+    do {                                      \
+        if (ttp_verbose > (vl)) {             \
+            printk (KERN_DEBUG TTP_PREFIX a); \
+        }                                     \
+    } while (0)
+#  define TTP_DB2(a...)    TTP_DBv(2, a)
+#  define TTP_DB1(a...)    TTP_DBv(1, a)
+#  define TTP_DBG(a...)    TTP_DBv(0, a)
 #  define TTP_LOG(a...)    printk (KERN_DEFAULT TTP_PREFIX a)
-#  define TTP_VBG(aa...)   if (ttp_verbose >= 0) TTP_DBG (aa)
+#  define TTP_VBG(a...)    TTP_DB1(a)
 #endif
 
 #ifndef from_work /* kernel-6.11.x defines this in include/linux/workqueue.h */
@@ -269,10 +277,8 @@ static inline void ttp_mac_from_shim (u8 *mac, const u8 *shim)
 
 static inline void ttp_print_eth_hdr (const struct ethhdr *eth)
 {
-    if (ttp_verbose > 0) {
-        TTP_DBG ("dmac: %*pM smac:%*pM etype:%04x\n", ETH_ALEN, eth->h_dest,
-                 ETH_ALEN, eth->h_source, ntohs (eth->h_proto));
-    }
+    TTP_DBG ("dmac: %*pM smac:%*pM etype:%04x\n", ETH_ALEN, eth->h_dest,
+             ETH_ALEN, eth->h_source, ntohs (eth->h_proto));
 }
 
 
@@ -293,27 +299,23 @@ static inline struct in6_addr *ttp_mac2lla6 (struct in6_addr *ip, const u8 *mac)
 
 static inline void ttp_print_ipv4_hdr (struct iphdr *ip)
 {
-    if (ttp_verbose > 0) {
-        TTP_DBG ("ip4h: %*ph\n", 10, ip);
-        TTP_DBG ("      %*ph\n", (int)sizeof (*ip) - 10, (10 + (u8 *)ip));
-        TTP_DBG ("  ver:%d ihl:%d ttl:%d tos:%02x len:%d proto:%d%s\n",
-                 ip->version, ip->ihl, ip->ttl, ip->tos, ntohs (ip->tot_len),
-                 ip->protocol, ip->protocol == TTP_IPPROTO_TTP ? " (TTP)" : "");
-        TTP_DBG (" dip4:%pI4 sip4:%pI4\n", &ip->daddr, &ip->saddr);
-    }
+    TTP_DBG ("ip4h: %*ph\n", 10, ip);
+    TTP_DBG ("      %*ph\n", (int)sizeof (*ip) - 10, (10 + (u8 *)ip));
+    TTP_DBG ("  ver:%d ihl:%d ttl:%d tos:%02x len:%d proto:%d%s\n",
+             ip->version, ip->ihl, ip->ttl, ip->tos, ntohs (ip->tot_len),
+             ip->protocol, ip->protocol == TTP_IPPROTO_TTP ? " (TTP)" : "");
+    TTP_DBG (" dip4:%pI4 sip4:%pI4\n", &ip->daddr, &ip->saddr);
 }
 
 
 static inline void ttp_print_ipv6_hdr (struct ipv6hdr *ipv6)
 {
-    if (ttp_verbose > 0) {
-        TTP_DBG ("ip6h: %*ph\n", 20, ipv6);
-        TTP_DBG ("      %*ph\n", (int)sizeof (*ipv6) - 20, (20 + (u8 *)ipv6));
-        TTP_DBG ("  ver:%d len:%d ttl:%d proto:%d%s\n",
-                 ipv6->version, ntohs (ipv6->payload_len), ipv6->hop_limit,
-                 ipv6->nexthdr, ipv6->nexthdr == TTP_IPPROTO_TTP ? " (TTP)" : "");
-        TTP_DBG (" dip6:%pI6c sip6:%pI6c\n", &ipv6->daddr, &ipv6->saddr);
-    }
+    TTP_DBG ("ip6h: %*ph\n", 20, ipv6);
+    TTP_DBG ("      %*ph\n", (int)sizeof (*ipv6) - 20, (20 + (u8 *)ipv6));
+    TTP_DBG ("  ver:%d len:%d ttl:%d proto:%d%s\n",
+             ipv6->version, ntohs (ipv6->payload_len), ipv6->hop_limit,
+             ipv6->nexthdr, ipv6->nexthdr == TTP_IPPROTO_TTP ? " (TTP)" : "");
+    TTP_DBG (" dip6:%pI6c sip6:%pI6c\n", &ipv6->daddr, &ipv6->saddr);
 }
 
 
@@ -341,10 +343,6 @@ static inline u8 *ttp_prepare_ipv4 (u8 *pkt, int len, u32 sa4, u32 da4)
     ipv4->daddr = da4;
     ipv4->tot_len = htons (frame_len - ETH_HLEN);
     ipv4->check = ip_fast_csum ((unsigned char *)ipv4, ipv4->ihl);
-
-    if (ttp_verbose > 2) {
-        ttp_print_ipv4_hdr (ipv4);
-    }
 
     return (u8 *)(ipv4 + 1);
 }
@@ -374,44 +372,36 @@ static inline u8 *ttp_prepare_ipv6 (u8 *pkt, int len, const struct in6_addr *sa6
     ipv6->daddr = *da6;
     ipv6->payload_len = htons (frame_len - ETH_HLEN - sizeof (struct ipv6hdr));
 
-    if (ttp_verbose > 2) {
-        ttp_print_ipv6_hdr (ipv6);
-    }
-
     return (u8 *)(ipv6 + 1);
 }
 
 
 static inline void ttp_print_tsla_type_hdr (const struct ttp_tsla_type_hdr *tth)
 {
-    if (ttp_verbose > 0) {
-        if (ttp_mem_is_zero ((u8 *)tth->pad, sizeof (tth->pad))) {
-            TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
-                     "res:0x%02x len:%d pad(%d)%s\n",
-                     tth->styp, tth->vers, tth->tthl, tth->l3gw,
-                     tth->resv, ntohs (tth->tot_len),
-                     (int)sizeof (tth->pad),
-                     (int)sizeof (tth->pad) ? ":00's" : "");
-        } else {
-            TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
-                     "res:0x%02x len:%d\n",
-                     tth->styp, tth->vers, tth->tthl, tth->l3gw,
-                     tth->resv, ntohs (tth->tot_len));
-            TTP_DBG ("      pad(%d): %*phN\n", (int)sizeof (tth->pad),
-                     (int)sizeof (tth->pad), tth->pad);
-        }
+    if (ttp_mem_is_zero ((u8 *)tth->pad, sizeof (tth->pad))) {
+        TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
+                 "res:0x%02x len:%d pad(%d)%s\n",
+                 tth->styp, tth->vers, tth->tthl, tth->l3gw,
+                 tth->resv, ntohs (tth->tot_len),
+                 (int)sizeof (tth->pad),
+                 (int)sizeof (tth->pad) ? ":00's" : "");
+    } else {
+        TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
+                 "res:0x%02x len:%d\n",
+                 tth->styp, tth->vers, tth->tthl, tth->l3gw,
+                 tth->resv, ntohs (tth->tot_len));
+        TTP_DBG ("      pad(%d): %*phN\n", (int)sizeof (tth->pad),
+                 (int)sizeof (tth->pad), tth->pad);
     }
 }
 
 
 static inline void ttp_print_shim_hdr (const struct ttp_tsla_shim_hdr *tsh)
 {
-    if (ttp_verbose > 0) {
-        TTP_DBG (" tsh: src-node:%*phC dst-node:%*phC length:%d%s%*phC\n",
-                 ETH_ALEN/2, tsh->src_node, ETH_ALEN/2, tsh->dst_node,
-                 ntohs (tsh->length),
-                 ntohs (tsh->length) == 2 ? " ctrl:" : "",
-                 ntohs (tsh->length) == 2 ? 2 : 0, tsh + 1);
-    }
+    TTP_DBG (" tsh: src-node:%*phC dst-node:%*phC length:%d%s%*phC\n",
+             ETH_ALEN/2, tsh->src_node, ETH_ALEN/2, tsh->dst_node,
+             ntohs (tsh->length),
+             ntohs (tsh->length) == 2 ? " ctrl:" : "",
+             ntohs (tsh->length) == 2 ? 2 : 0, tsh + 1);
 }
 #endif

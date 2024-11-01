@@ -88,13 +88,13 @@ static struct class *ttp_class;
 static struct device *ttp_device;
 
 #define TTP_TARGET_INVALID  (-1)
-struct ttpoe_noc_host ttp_debug_source;
-struct ttpoe_noc_host ttp_debug_target;
+struct ttpoe_host_info ttp_debug_source;
+struct ttpoe_host_info ttp_debug_target;
 
 
-int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_noc_host *tg)
+int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_host_info *tg)
 {
-    u64 lkid, skid;
+    u64 tkid, skid;
     u8  mac[ETH_ALEN];
 
     if (!kid) {
@@ -107,10 +107,12 @@ int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_noc_host *tg)
         return -EDESTADDRREQ;
     }
 
-    if (tg->mac[0] != Tesla_Mac_Oui0 || tg->mac[1] != Tesla_Mac_Oui1 ||
-        tg->mac[2] != Tesla_Mac_Oui2) {
-        /* don't create tag for target; it could be a gw-ctrl pkt */
-        return -EADDRNOTAVAIL;
+    if (!ttp_ipv4_encap) {
+        if (tg->mac[0] != Tesla_Mac_Oui0 || tg->mac[1] != Tesla_Mac_Oui1 ||
+            tg->mac[2] != Tesla_Mac_Oui2) {
+            /* don't create tag for target; it could be a gw-ctrl pkt */
+            return -EADDRNOTAVAIL;
+        }
     }
 
     /* common tesla oui */
@@ -130,24 +132,29 @@ int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_noc_host *tg)
     mac[4] = tg->mac[4];
     mac[5] = tg->mac[5];
 
-    lkid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_ipv4_encap);
+    tkid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_ipv4_encap);
 
     /* check source kid == target kid */
-    if (skid == lkid) {
+    if (skid == tkid) {
         return -EADDRINUSE;
     }
 
-    *kid = lkid;
-    TTP_DBG ("0x%016llx: ttp-target:%*phC vc:%d gw:%d\n",
-             cpu_to_be64 (*kid), ETH_ALEN, mac, tg->vc, tg->gw);
+    *kid = tkid;
+    ttp_tag_add (tkid);
 
-    ttp_tag_add (*kid);
-
+    if (ttp_ipv4_encap) {
+        TTP_DB2 ("0x%016llx: ttp-target.ip:%pI4 vc:%d gw:%d\n", cpu_to_be64 (tkid),
+                 &tg->ipa, tg->vc, tg->gw);
+    }
+    else {
+        TTP_DB2 ("0x%016llx: ttp-target.mac:%*phC vc:%d gw:%d\n", cpu_to_be64 (tkid),
+                 ETH_ALEN, mac, tg->vc, tg->gw);
+    }
     return 0;
 }
 
 
-int ttpoe_noc_debug_rx (const u8 *data, const u16 nl)
+int ttpoe_noc_debug_rx (const u8 *data, u16 nl)
 {
     BUG_ON (!nl);
 
@@ -171,9 +178,8 @@ int ttpoe_noc_debug_rx (const u8 *data, const u16 nl)
 }
 
 
-int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, const int nl,
-                        const enum ttp_events_enum evnt,
-                        struct ttpoe_noc_host *tg)
+int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, int nl,
+                        enum ttp_events_enum evnt, struct ttpoe_host_info *tg)
 {
     int rv;
     u64 kid = 0;
@@ -185,10 +191,8 @@ int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, const int nl,
         return -EINVAL;
     }
     if (nl == 2) { /* control pkt */
-        if (ttp_verbose > 2) {
-            TTP_DBG ("%s: Control pkt target.vc: %*phC.%d gw:%d valid:%d len:%d\n",
-                     __FUNCTION__, ETH_ALEN, tg->mac, tg->vc, tg->gw, tg->ve, nl);
-        }
+        TTP_DB2 ("%s: Control pkt target.vc: %*phC.%d gw:%d valid:%d len:%d\n",
+                 __FUNCTION__, ETH_ALEN, tg->mac, tg->vc, tg->gw, tg->ve, nl);
         clt._rkid = kid;
         clt.gw3 = 1;
         kid = clt._rkid;
@@ -339,7 +343,7 @@ static ssize_t ttpoe_noc_debug_read (struct file *filp, char *buf,
 {
     int kc, rc;
 
-    TTP_DBG ("%s: %s (%lld/%zu)\n", __FUNCTION__, filp->f_path.dentry->d_name.name,
+    TTP_DB1 ("%s: %s (%lld/%zu)\n", __FUNCTION__, filp->f_path.dentry->d_name.name,
              *ppos, nbytes);
 
     if (*ppos < 0) {
@@ -356,6 +360,7 @@ static ssize_t ttpoe_noc_debug_read (struct file *filp, char *buf,
     if ((rc = copy_to_user (buf, ttp_noc_debug_page + *ppos, kc)) < 0) {
         return -EIO;
     }
+    TTP_LOG ("%s: ^^^^ Put %u bytes\n", __FUNCTION__, kc);
 
     *ppos += kc;
     return kc;
@@ -367,7 +372,7 @@ static int ttpoe_noc_debug_release (struct inode *inode, struct file *filp)
     if (!filp->private_data) {
         ttp_noc_debug_len = 0;
         memset (ttp_noc_debug_page, 0, PAGE_SIZE);
-        TTP_DBG ("%s: noc_debug: Erased\n", __FUNCTION__);
+        TTP_DB1 ("%s: noc_debug: Erased\n", __FUNCTION__);
     }
 
     return 0;

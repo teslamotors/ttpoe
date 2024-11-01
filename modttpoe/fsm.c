@@ -82,7 +82,7 @@ static bool ttp_fsm_sef__TAG_RESET (struct ttp_fsm_event *ev)
 {
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
+    TTP_DB1 ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
         return false;
@@ -104,7 +104,7 @@ static bool ttp_fsm_sef__CHECK_NOC (struct ttp_fsm_event *ev)
 {
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
+    TTP_DB1 ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
         return false;
@@ -125,7 +125,7 @@ static bool ttp_fsm_sef__OPEN_TIMER (struct ttp_fsm_event *ev)
 {
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx\n", __FUNCTION__, cpu_to_be64 (ev->kid));
+    TTP_DB1 ("%s: 0x%016llx\n", __FUNCTION__, cpu_to_be64 (ev->kid));
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
         return false;
@@ -151,7 +151,7 @@ static bool ttp_fsm_sef__EMPTY_NOCQ (struct ttp_fsm_event *ev)
 {
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx\n", __FUNCTION__, cpu_to_be64 (ev->kid));
+    TTP_DB1 ("%s: 0x%016llx\n", __FUNCTION__, cpu_to_be64 (ev->kid));
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
         return false;
@@ -173,7 +173,7 @@ static bool ttp_fsm_sef__TAG_ALLOC (struct ttp_fsm_event *ev)
     int rv;
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx.%d rx:%d tx:%d\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d rx:%d tx:%d\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, ev->psi.rxi_seq, ev->psi.txi_seq);
 
     ttp_bloom_add (ev->kid);
@@ -202,7 +202,7 @@ static bool ttp_fsm_sef__QUIESCE_START (struct ttp_fsm_event *ev)
 {
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
+    TTP_DB1 ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
         return false;
@@ -314,7 +314,7 @@ enum ttp_events_enum ttp_opcodes_to_events_map[TTP_OP__NUM_OP] = {
         ttp_skb_xmit (skb);                               \
         TTP_EVLOG (ev, TTP_LG__PKT_TX, op);               \
                                                           \
-        TTP_DBG ("%s: 0x%016llx.%d <<Sent: %s<<\n",       \
+        TTP_DB1 ("%s: 0x%016llx.%d <<Sent: %s<<\n",       \
                  __FUNCTION__,                            \
                  cpu_to_be64 (ev->kid), ev->idx,          \
                  TTP_OPCODE_NAME (op));                   \
@@ -359,7 +359,7 @@ static bool ttp_fsm_rs__OPEN (struct ttp_fsm_event *ev)
     ttp_skb_xmit (skb);
     TTP_EVLOG (ev, TTP_LG__PKT_TX, op);
 
-    TTP_DBG ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, TTP_OPCODE_NAME (op));
     return true;
 }
@@ -400,7 +400,7 @@ static bool ttp_fsm_rs__CLOSE (struct ttp_fsm_event *ev)
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_START, TTP_OP__invalid);
     }
 
-    TTP_DBG ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, TTP_OPCODE_NAME (op));
     return true;
 }
@@ -442,7 +442,7 @@ static bool ttp_fsm_rs__CLOSE_XACK (struct ttp_fsm_event *ev)
     ttp_skb_xmit (skb);
     TTP_EVLOG (ev, TTP_LG__PKT_TX, op);
 
-    TTP_DBG ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, TTP_OPCODE_NAME (op));
     return true;
 }
@@ -459,7 +459,7 @@ static bool ttp_fsm_rs__ACK (struct ttp_fsm_event *ev)
 
     ttp_skb_pars (ev->rsk, &frh, &pif);
 
-    TTP_DBG ("%s: 0x%016llx.%d len: %d\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d len: %d\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, pif.noc_len);
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
@@ -498,7 +498,7 @@ static bool ttp_fsm_rs__ACK (struct ttp_fsm_event *ev)
             lt->rx_seq_id++;    /* update tag-rx-seq-id */
 
             TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_RX, op);
-            TTP_DBG ("`-> %s: ACK payload seq-id:%d (exp:%d+1)\n",
+            TTP_DB1 ("`-> %s: ACK payload seq-id:%d (exp:%d+1)\n",
                      __FUNCTION__, pif.txi_seq, lt->rx_seq_id);
             atomic_inc (&ttp_stats.pld_ct);
         }
@@ -506,7 +506,7 @@ static bool ttp_fsm_rs__ACK (struct ttp_fsm_event *ev)
             op = TTP_OP__TTP_ACK;
 
             TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_DUP, op);
-            TTP_DBG ("`-> %s: ACK duplicate seq-id:%d (exp:%d+1)\n",
+            TTP_DB1 ("`-> %s: ACK duplicate seq-id:%d (exp:%d+1)\n",
                      __FUNCTION__, pif.txi_seq, lt->rx_seq_id);
             atomic_inc (&ttp_stats.drp_ct);
         }
@@ -514,7 +514,7 @@ static bool ttp_fsm_rs__ACK (struct ttp_fsm_event *ev)
             op = TTP_OP__TTP_NACK;
 
             TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_DROP, op);
-            TTP_DBG ("`-> %s: NACK future seq-id:%d (exp:%d+1)\n",
+            TTP_DB1 ("`-> %s: NACK future seq-id:%d (exp:%d+1)\n",
                      __FUNCTION__, pif.txi_seq, lt->rx_seq_id);
             atomic_inc (&ttp_stats.drp_ct);
         }
@@ -522,7 +522,7 @@ static bool ttp_fsm_rs__ACK (struct ttp_fsm_event *ev)
             op = TTP_OP__TTP_NACK;
 
             TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_DROP, op);
-            TTP_DBG ("`-> %s: NACK *UNEXPECTED* seq-id:%d (exp:%d+1)\n",
+            TTP_DB1 ("`-> %s: NACK *UNEXPECTED* seq-id:%d (exp:%d+1)\n",
                      __FUNCTION__, pif.txi_seq, lt->rx_seq_id);
             atomic_inc (&ttp_stats.drp_ct);
         }
@@ -543,7 +543,7 @@ send:
     ttp_skb_xmit (skb);
     TTP_EVLOG (ev, TTP_LG__PKT_TX, op);
 
-    TTP_DBG ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, TTP_OPCODE_NAME (op));
     return true;
 }
@@ -554,7 +554,7 @@ static bool ttp_fsm_rs__REPLAY_DATA (struct ttp_fsm_event *ev)
 {
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
+    TTP_DB1 ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
         return false;
@@ -573,7 +573,7 @@ static bool ttp_fsm_rs__PAYLOAD (struct ttp_fsm_event *ev)
     struct ttp_frame_hdr frh;
     enum ttp_opcodes_enum op = TTP_OP__TTP_PAYLOAD;
 
-    TTP_DBG ("%s: 0x%016llx.%d (len: %d)\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d (len: %d)\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, ev->psi.noc_len);
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
@@ -611,7 +611,7 @@ static bool ttp_fsm_rs__PAYLOAD (struct ttp_fsm_event *ev)
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_START, TTP_OP__invalid);
     }
 
-    TTP_DBG ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, TTP_OPCODE_NAME (op));
     return true;
 }
@@ -625,7 +625,7 @@ static bool ttp_fsm_rs__PAYLOAD2 (struct ttp_fsm_event *ev)
     struct ttp_frame_hdr frh;
     enum ttp_opcodes_enum op = TTP_OP__TTP_PAYLOAD;
 
-    TTP_DBG ("%s: 0x%016llx\n", __FUNCTION__, cpu_to_be64 (ev->kid));
+    TTP_DB1 ("%s: 0x%016llx\n", __FUNCTION__, cpu_to_be64 (ev->kid));
 
     if (!(lt = ttp_rbtree_tag_get (ev->kid))) {
         return false;
@@ -668,7 +668,7 @@ static bool ttp_fsm_rs__PAYLOAD2 (struct ttp_fsm_event *ev)
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_START, TTP_OP__invalid);
     }
 
-    TTP_DBG ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d <<Sent: %s<<\n", __FUNCTION__,
              cpu_to_be64 (ev->kid), ev->idx, TTP_OPCODE_NAME (op));
     return true;
 }
@@ -677,7 +677,7 @@ static bool ttp_fsm_rs__PAYLOAD2 (struct ttp_fsm_event *ev)
 TTP_NOINLINE
 static bool ttp_fsm_rs__DROP (struct ttp_fsm_event *ev)
 {
-    TTP_DBG ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
+    TTP_DB1 ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
     return true;
 }
 
@@ -685,7 +685,7 @@ static bool ttp_fsm_rs__DROP (struct ttp_fsm_event *ev)
 TTP_NOINLINE
 static bool ttp_fsm_rs__INTERRUPT (struct ttp_fsm_event *ev)
 {
-    TTP_DBG ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
+    TTP_DB1 ("%s: 0x%016llx.%d\n", __FUNCTION__, cpu_to_be64 (ev->kid), ev->idx);
     return true;
 }
 
@@ -714,12 +714,12 @@ static bool ttp_fsm_ev_hdl__RXQ__TTP_OPEN (struct ttp_fsm_event *qev)
 {
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
              cpu_to_be64 (qev->kid), qev->idx, qev->psi.rxi_seq, qev->psi.txi_seq);
 
     if ((lt = ttp_rbtree_tag_get (qev->kid))) {
         lt->rx_seq_id = qev->psi.txi_seq; /* init tag-rx-seq-id with OPEN's tx-seq-id */
-        TTP_DBG ("`-> found existing tag (dup TTP_OPEN)\n");
+        TTP_DB1 ("`-> found existing tag (dup TTP_OPEN)\n");
     }
     return true;
 }
@@ -731,7 +731,7 @@ static bool ttp_fsm_ev_hdl__RXQ__TTP_OPEN_ACK (struct ttp_fsm_event *qev)
     int tv;
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
              cpu_to_be64 (qev->kid), qev->idx, qev->psi.rxi_seq, qev->psi.txi_seq);
 
     if (!(lt = ttp_rbtree_tag_get (qev->kid))) {
@@ -755,7 +755,7 @@ static bool ttp_fsm_ev_hdl__RXQ__TTP_ACK (struct ttp_fsm_event *qev)
     struct ttp_link_tag *lt;
     struct ttp_fsm_event *ev;
 
-    TTP_DBG ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
              cpu_to_be64 (qev->kid), qev->idx, qev->psi.rxi_seq, qev->psi.txi_seq);
 
     if (!(lt = ttp_rbtree_tag_get (qev->kid))) {
@@ -771,21 +771,21 @@ static bool ttp_fsm_ev_hdl__RXQ__TTP_ACK (struct ttp_fsm_event *qev)
 
     if (!(ev = list_first_entry_or_null (&lt->ncq, struct ttp_fsm_event, elm))) {
         mutex_unlock (&ttp_global_root_head.event_mutx);
-        TTP_DBG ("`-> %s: noc-queue drained\n", __FUNCTION__);
+        TTP_DB1 ("`-> %s: noc-queue drained\n", __FUNCTION__);
         return false;
     }
 
     /* process ACK'ed rx-seq-id, match to sent tx-seq-id and free noc data below */
     if (ev->psi.txi_seq != qev->psi.rxi_seq) {
         mutex_unlock (&ttp_global_root_head.event_mutx);
-        TTP_DBG ("`-> %s: seq-id mismatch: ack-rx:%d ev-tx:%d\n", __FUNCTION__,
+        TTP_DB1 ("`-> %s: seq-id mismatch: ack-rx:%d ev-tx:%d\n", __FUNCTION__,
                  qev->psi.rxi_seq, ev->psi.txi_seq);
         goto requ;
     }
 
     lt->retire_id = ev->psi.txi_seq; /* store seq-id of last retired payload */
 
-    TTP_DBG ("`-> %s: noc-data free: ev-tx:%d\n", __FUNCTION__, ev->psi.txi_seq);
+    TTP_DB1 ("`-> %s: noc-data free: ev-tx:%d\n", __FUNCTION__, ev->psi.txi_seq);
     TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_FREE, TTP_OP__TTP_ACK);
 
     list_del (&ev->elm);
@@ -811,7 +811,7 @@ static bool ttp_fsm_ev_hdl__RXQ__TTP_NACK (struct ttp_fsm_event *qev)
     struct ttp_link_tag *lt;
     struct ttp_fsm_event *ev;
 
-    TTP_DBG ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
              cpu_to_be64 (qev->kid), qev->idx, qev->psi.rxi_seq, qev->psi.txi_seq);
 
     if (!(lt = ttp_rbtree_tag_get (qev->kid))) {
@@ -827,14 +827,14 @@ static bool ttp_fsm_ev_hdl__RXQ__TTP_NACK (struct ttp_fsm_event *qev)
 
     if (!(ev = list_first_entry_or_null (&lt->ncq, struct ttp_fsm_event, elm))) {
         mutex_unlock (&ttp_global_root_head.event_mutx);
-        TTP_DBG ("`-> %s: noc-queue drained\n", __FUNCTION__);
+        TTP_DB1 ("`-> %s: noc-queue drained\n", __FUNCTION__);
         return false;
     }
 
     /* process ACK'ed rx-seq-id, match to sent tx-seq-id and free noc data below */
     if (ev->psi.txi_seq != qev->psi.rxi_seq) {
         mutex_unlock (&ttp_global_root_head.event_mutx);
-        TTP_DBG ("`-> %s: seq-id mismatch: ack-rx:%d ev-tx:%d\n", __FUNCTION__,
+        TTP_DB1 ("`-> %s: seq-id mismatch: ack-rx:%d ev-tx:%d\n", __FUNCTION__,
                  qev->psi.rxi_seq, ev->psi.txi_seq);
         goto requ;
     }
@@ -853,7 +853,7 @@ static bool ttp_fsm_ev_hdl__RXQ__TTP_PAYLOAD (struct ttp_fsm_event *qev)
     int tv;
     struct ttp_link_tag *lt;
 
-    TTP_DBG ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d: rx:%d tx:%d\n", __FUNCTION__,
              cpu_to_be64 (qev->kid), qev->idx, qev->psi.rxi_seq, qev->psi.txi_seq);
 
     if (!(lt = ttp_rbtree_tag_get (qev->kid))) {

@@ -201,6 +201,15 @@ struct ttp_pkt_info {
 } __attribute__((packed));
 
 
+struct ttpoe_host_info {
+    u32 ipa;           /* source / target ip-address - in ipv4 encap */
+    u8  mac[ETH_ALEN]; /* source / target mac-address - in raw/gw */
+    u8  vc;            /* vc_id */
+    u8  gw;            /* via l3-gateway */
+    u8  ve;            /* valid entry */
+};
+
+
 struct ttp_fsm_event;
 enum   ttp_opcodes_enum;
 
@@ -209,7 +218,7 @@ extern bool ttp_rnd_flip (int pct);
 extern void ttp_skb_drop (struct sk_buff *skb);
 extern void ttp_skb_xmit (struct sk_buff *skb);
 extern void ttp_tsk_bind (struct ttp_fsm_event *ev, const struct ttp_fsm_event *qev);
-extern u8  *ttp_skb_aloc (struct sk_buff **skbp, const int nl);
+extern u8  *ttp_skb_aloc (struct sk_buff **skbp, int nl);
 extern bool ttp_skb_prep (struct sk_buff **skbp, struct ttp_fsm_event *qev,
                           enum ttp_opcodes_enum op);
 extern u16  ttp_skb_pars (const struct sk_buff *skb, struct ttp_frame_hdr *fh,

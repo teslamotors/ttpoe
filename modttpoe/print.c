@@ -371,25 +371,34 @@ TTP_NOTRACE void ttp_print_tag_val (struct seq_file *seq, const struct ttp_link_
 
 
 TTP_NOTRACE
-void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_direction dir)
+void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_direction dir, int lv)
 {
     u16 etype;
+    char *sdir;
     struct ttp_frame_hdr frh;
     struct ttp_pkt_info  pif = {0};
 
-    if (ttp_verbose < 2) {
+    if (ttp_verbose <= lv) {
         return;
     }
 
     etype = ttp_skb_pars (skb, &frh, &pif);
+    switch (dir) {
+    case TTP_RX:
+        sdir = ">>>> RXQ";
+        break;
+    case TTP_TX:
+        sdir = "<<<< TXQ";
+        break;
+    }
 
     TTP_VBG ("+---- Parse %s frame: (skb-len: %d) (noc-len: %d) ---+\n",
-             TTP_RX == dir ? ">>>> RXQ" : "<<<< TXQ", skb->len, pif.noc_len);
-
+             sdir, skb->len, pif.noc_len);
     TTP_RAW ((u8 *)skb->data, skb->len);
 
-    ttp_print_eth_hdr (frh.eth);
-
+    if (ttp_verbose > lv) {
+        ttp_print_eth_hdr (frh.eth);
+    }
     switch (etype) {
     case TESLA_ETH_P_TTPOE:
         ttp_print_tsla_type_hdr (frh.tth);

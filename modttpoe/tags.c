@@ -696,7 +696,7 @@ static int ttp_evt_dequ (void)
         TTP_DBG ("##-> FSM Step: %s ==> %s / %s ==> %s\n",
                  TTP_STATE_NAME (cs), TTP_EVENT_NAME (ev->evt),
                  TTP_RESPONSE_NAME (rs), TTP_STATE_NAME (ns));
-        TTP_DBG ("`-> channel:%d 0x%016llx.%d rx:%d tx:%d\n", chnl,
+        TTP_DB1 ("`-> channel:%d 0x%016llx.%d rx:%d tx:%d\n", chnl,
                  cpu_to_be64 (ev->kid), ev->idx, ev->psi.rxi_seq, ev->psi.txi_seq);
     }
 
@@ -705,20 +705,20 @@ static int ttp_evt_dequ (void)
     /* handle event */
     if ((lt = ttp_rbtree_tag_get (ev->kid))) {
         if (ttp_verbose_for_ctrl (ev->psi.noc_len)) {
-            TTP_DBG ("##`-> FSM Event-Handle: %s lt-rx:%d lt-tx:%d gw:%d tp:%d\n",
-                     TTP_EVENT_NAME (ev->evt), lt->rx_seq_id, lt->tx_seq_id,
-                     lt->gw3, lt->tp4);
+            TTP_DB1 ("##`-> FSM Event-Handle: %s\n", TTP_EVENT_NAME (ev->evt));
+            TTP_DB2 ("  `-> lt-rx:%d lt-tx:%d gw:%d tp:%d\n",
+                     lt->rx_seq_id, lt->tx_seq_id, lt->gw3, lt->tp4);
         }
     }
     dqfnp = ttp_fsm_event_handle_fn[ev->evt];
     if (dqfnp && ev->rsk) {
         if (!dqfnp (ev)) {
-            TTP_DBG ("!!`-> FSM Event-Handle: %s [FAILED]\n", TTP_EVENT_NAME (ev->evt));
+            TTP_DB1 ("!!`-> FSM Event-Handle: %s [FAILED]\n", TTP_EVENT_NAME (ev->evt));
         }
     }
 
     /* do response */
-    TTP_DBG ("##`-> FSM Response: %s\n", TTP_RESPONSE_NAME (rs));
+    TTP_DB1 ("##`-> FSM Response: %s\n", TTP_RESPONSE_NAME (rs));
     dqfnp = ttp_fsm_response_fn[rs];
     if (dqfnp) {
         if (!dqfnp (ev)) {
@@ -729,7 +729,7 @@ static int ttp_evt_dequ (void)
     ttp_tag_signal_tag (ev);
 
     /* call the state entry function for the state we're entering (ns) */
-    TTP_DBG ("##`-> FSM State-Entry: %s\n", TTP_STATE_NAME (ns));
+    TTP_DB1 ("##`-> FSM State-Entry: %s\n", TTP_STATE_NAME (ns));
     dqfnp = ttp_fsm_entry_function[ns];
     if (dqfnp) {
         if (!dqfnp (ev)) {
@@ -823,7 +823,7 @@ int ttp_noc_dequ (struct ttp_link_tag *lt)
 
     mutex_unlock (&ttp_global_root_head.event_mutx);
 
-    TTP_DBG ("%s: 0x%016llx.%d evnt: %s\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d evnt: %s\n", __FUNCTION__,
              cpu_to_be64 (tev->kid), tev->idx,
              TTP_EVENT_IS_VALID (tev->evt) ? TTP_EVENT_NAME (tev->evt) : "null");
 
@@ -848,7 +848,7 @@ void ttp_noc_requ (struct ttp_link_tag *lt)
     tev = list_first_entry_or_null (&lt->ncq, struct ttp_fsm_event, elm);
     if (!tev) {                 /* exit if no evnt of is already in txq */
         mutex_unlock (&ttp_global_root_head.event_mutx);
-        TTP_DBG ("%s: 0x%016llx.%d\n", __FUNCTION__,
+        TTP_DB1 ("%s: 0x%016llx.%d\n", __FUNCTION__,
                  cpu_to_be64 (lt->_rkid), tev ? tev->idx : -1);
         return;
     }
@@ -856,7 +856,7 @@ void ttp_noc_requ (struct ttp_link_tag *lt)
     if (lt->try <= max_retry) { /* allow 'max_retry' re-tries */
         if (lt->txt < lt->twz) { /* cp_enqueue while under window size */
             if ((ev = ttp_evt_cpqu_locked (tev))) {
-                TTP_DBG ("%s: `-> %senqueue#%d %s len:%d tx:%d mark:%s\n", __FUNCTION__,
+                TTP_DB1 ("%s: `-> %senqueue#%d %s len:%d tx:%d mark:%s\n", __FUNCTION__,
                          lt->try ? "re-" : "", lt->try, TTP_EVENT_NAME (tev->evt),
                          ev->psi.noc_len, ev->psi.txi_seq,
                          TTP_EVENTS_FENCE_TO_STR (tev->mrk));
@@ -884,7 +884,7 @@ void ttp_noc_requ (struct ttp_link_tag *lt)
 
     mutex_unlock (&ttp_global_root_head.event_mutx);
 
-    TTP_DBG ("%s: 0x%016llx.%d >max re-tries(%d)\n", __FUNCTION__,
+    TTP_DB1 ("%s: 0x%016llx.%d >max re-tries(%d)\n", __FUNCTION__,
              cpu_to_be64 (lt->_rkid), tev->idx, max_retry);
     TTP_EVLOG (tev, TTP_LG__NOC_PAYLOAD_DROP, TTP_OP__TTP_PAYLOAD);
 
@@ -895,7 +895,7 @@ void ttp_noc_requ (struct ttp_link_tag *lt)
         ev->evt = TTP_EV__INQ__TIMEOUT;
         ev->kid = lt->_rkid;
         ttp_evt_enqu (ev);
-        TTP_DBG ("%s: wq: evnt: int__TIMEOUT\n", __FUNCTION__);
+        TTP_DB1 ("%s: wq: evnt: int__TIMEOUT\n", __FUNCTION__);
         TTP_EVLOG (ev, TTP_LG__TIMER_TIMEOUT, TTP_OP__invalid);
     }
 }
@@ -955,7 +955,7 @@ static void ttp_do_tag_work (struct work_struct *wk)
             ev->evt = TTP_EV__INQ__TIMEOUT;
             ev->kid = lt->_rkid;
             ttp_evt_enqu (ev);
-            TTP_DBG ("%s: wq: evnt: int__TIMEOUT\n", __FUNCTION__);
+            TTP_DB1 ("%s: wq: evnt: int__TIMEOUT\n", __FUNCTION__);
             TTP_EVLOG (ev, TTP_LG__TIMER_TIMEOUT, TTP_OP__invalid);
         }
     }
@@ -1023,7 +1023,7 @@ void ttp_evt_enqu (struct ttp_fsm_event *ev)
         schedule_work (&ttp_global_root_head.work_queue);
     }
 
-    TTP_DBG ("%s: enqueue %s len:%d tx:%d mark:%s\n", __FUNCTION__,
+    TTP_DB1 ("%s: enqueue %s len:%d tx:%d mark:%s\n", __FUNCTION__,
              TTP_EVENT_NAME (ev->evt), ev->psi.noc_len, ev->psi.txi_seq,
              TTP_EVENTS_FENCE_TO_STR (ev->mrk));
 }
@@ -1054,7 +1054,7 @@ void ttp_noc_enqu (struct ttp_fsm_event *ev)
     schedule_work (&lt->wkq);
 
     TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_ENQ, TTP_OP__TTP_PAYLOAD);
-    TTP_DBG ("%s: enqueue %s len:%d tx:%d mark:%s\n", __FUNCTION__,
+    TTP_DB1 ("%s: enqueue %s len:%d tx:%d mark:%s\n", __FUNCTION__,
              TTP_EVENT_NAME (ev->evt), ev->psi.noc_len, ev->psi.txi_seq,
              TTP_EVENTS_FENCE_TO_STR (ev->mrk));
 }

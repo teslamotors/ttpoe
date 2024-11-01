@@ -48,20 +48,12 @@
 
 #define TTP_VC_ID__IS_VALID(vci)    (((vci) >= 0) && ((vci) <= TTP_MAX_VCID))
 
-struct ttpoe_noc_host {
-    u8 mac[ETH_ALEN]; /* source / target mac-address */
-    u8 vc;            /* vc_id */
-    u8 gw;            /* via l3-gateway */
-    u8 ve;            /* valid entry */
-};
+extern struct ttpoe_host_info ttp_debug_source, ttp_debug_target;
 
-extern struct ttpoe_noc_host ttp_debug_source, ttp_debug_target;
-
-extern int ttpoe_noc_debug_rx (const u8 *data, const u16 nl);
-extern int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, const int nl,
-                               const enum ttp_events_enum evnt,
-                               struct ttpoe_noc_host *tg);
-extern int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_noc_host *tg);
+extern int ttpoe_noc_debug_rx (const u8 *data, u16 nl);
+extern int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, int nl,
+                               enum ttp_events_enum evnt, struct ttpoe_host_info *tg);
+extern int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_host_info *tg);
 
 extern int  __init ttpoe_noc_debug_init (void);
 extern void __exit ttpoe_noc_debug_exit (void);

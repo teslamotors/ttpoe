@@ -53,6 +53,7 @@ connVCI  = "0"
 tagSeqi  = "0"
 nhmac    = ""
 ipv4Arg  = 0
+prefix   = ""
 
 modpath  = "/sys/module/modttpoe/parameters"
 procpath = "/proc/net/modttpoe"
@@ -92,6 +93,7 @@ def setUpModule():
     global tagSeqi
     global nhmac
     global ipv4Arg
+    global prefix
 
     if "-vv" in sys.argv[1:] or "--vverbose" in sys.argv[1:]:
         verbose = 2
@@ -108,13 +110,23 @@ def setUpModule():
         selfDev = options.self_dev
         if verbose:
             print (f"     SelfDev: {selfDev} (override)")
-    elif options.ipv4:
-        selfDev = getDefaultIP4Dev()
+    if options.ipv4:
         ipv4Arg = 1
+        if verbose:
+            print (f"   TTP Encap: ipv4 (etype: 0x0800)")
+        if options.prefix:
+            prefix = options.prefix
+        else:
+            prefix = "10.0.0.0/8"
+        if not options.self_dev:
+            selfDev = getDefaultIP4Dev()
     else:
-        selfDev = getDefaultEthDev()
         ipv4Arg = 0
-    if verbose:
+        if verbose:
+            print (f"   TTP Encap: ttpoe (etype: 0x9ac6)")
+        if not options.self_dev:
+            selfDev = getDefaultEthDev()
+    if verbose and not options.self_dev:
         print (f"     selfDev: {selfDev} (default)")
     if (not options.target):
         print (f"Error: Missing --target")
@@ -135,9 +147,11 @@ def setUpModule():
         sys.exit (-1)
     selfMac = json.loads (str(out.stdout, encoding='utf-8'))[0]["address"]
     jstr = selfMac.split(':')
-    if ((jstr[-6] != "98") and (jstr[-5] != "ed") and (jstr[-4] != "5c")):
-        print (f"Error: '{selfDev}' is not a TTP device: {selfMac}")
-        sys.exit (-1)
+    # check Tesla OUI only for ttpoe/ethernet mode (+gw mode): Skip for ipv4 encap
+    if not options.ipv4:
+        if ((jstr[-6] != "98") and (jstr[-5] != "ed") and (jstr[-4] != "5c")):
+            print (f"Error: '{selfDev}' is not a TTP device: {selfMac}")
+            sys.exit (-1)
     selfMacA = f"{jstr[-3]}{jstr[-2]}{jstr[-1]}"
 
     targ = options.target.split(':')
@@ -225,7 +239,7 @@ def setUpModule():
         peerDev = getDefaultIP4Dev()
     else:
         peerDev = getDefaultEthDev()
-    if verbose:
+    if verbose and not options.peer_dev:
         print (f"     PeerDev: {peerDev} (default)")
     if peerHost:
         rv = os.system (f"ssh {peerHost} 'ifconfig {peerDev} 1>/dev/null'")
@@ -249,8 +263,6 @@ def setUpModule():
                 print (f" Use Gateway: {options.use_gw}")
             elif options.use_gw:
                 print (f" Use Gateway: True")
-        if options.ipv4:
-            os.system (f"echo 10.0.0.0/8 | sudo tee {modpath}/prefix 1>/dev/null")
         if verbose:
             pf = open (f"/sys/module/modttpoe/parameters/ipv4", "r")
             pfo = int (pf.read().strip())
@@ -259,11 +271,13 @@ def setUpModule():
                 print (f"   TTP Encap: ipv4 (etype: 0x0800)")
             else:
                 print (f"   TTP Encap: ttpoe (etype: 0x9ac6)")
+        if options.ipv4:
+            os.system (f"echo {prefix} | sudo tee {modpath}/prefix 1>/dev/null")
         if verbose and options.ipv4:
             pf = open (f"/sys/module/modttpoe/parameters/prefix", "r")
             pfo = pf.read().strip()
             pf.close()
-            print (f" IPv4 Prefix: {pfo}")
+            print (f" IPv4 Prefix: {pfo} ({'override' if options.prefix else 'default'})")
         if options.ipv4: # set target to allow nhmac to resolve below
             if options.vci: # set 'vc' before setting 'target'
                 rv = os.system (f"echo {connVCI} | sudo tee {modpath}/vci 1>/dev/null")
@@ -276,6 +290,16 @@ def setUpModule():
                 print (f"Error: Set target on 'self' failed")
                 tearDownModule()
                 sys.exit (-1)
+        if verbose and options.ipv4:
+            pf = open (f"/sys/module/modttpoe/parameters/ipv4_sip", "r")
+            pfo = pf.read().strip()
+            pf.close()
+            print (f"  `-> src-ip: {pfo}")
+        if verbose and options.ipv4:
+            pf = open (f"/sys/module/modttpoe/parameters/ipv4_dip", "r")
+            pfo = pf.read().strip()
+            pf.close()
+            print (f"  `-> dst-ip: {pfo}")
 
         lct = 10
         while ((options.use_gw or options.ipv4) and lct):
@@ -348,7 +372,7 @@ def setUpModule():
         else:
             time.sleep (0.5) # to allow peer module to settle down
         if options.ipv4:
-            os.system (f"ssh {peerHost} 'echo 10.0.0.0/8 |"
+            os.system (f"ssh {peerHost} 'echo {prefix} |"
                        f" sudo tee {modpath}/prefix 1>/dev/null'")
     if (0): # exit early control (change 0 --> 1 to enable)
         if verbose:
@@ -991,6 +1015,7 @@ if __name__ == '__main__':
     parser.add_argument ('--vci')                              # [--vci=<vc>]
     parser.add_argument ('--use-gw',     action='store_true')  # [--use-gw]
     parser.add_argument ('--ipv4',       action='store_true')  # [--ipv4]
+    parser.add_argument ('--prefix',                        )  # [--prefix=<A.B.C.D/L>]
     parser.add_argument ('--target')                           # [--target=<NN>]
     parser.add_argument ('--no-unload',  action='store_true')  # [--no-unload]
     parser.add_argument ('--no-load',    action='store_true')  # [--no-load]

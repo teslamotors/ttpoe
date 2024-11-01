@@ -61,7 +61,7 @@ char *ttp_dev;
 int   ttp_verbose  = -1;
 int   ttp_shutdown =  1; /* 'DOWN' by default - enabled at init after checking */
 
-u32 Tesla_Mac_Oui  = TESLA_MAC_OUI;
+const u32 Tesla_Mac_Oui  = TESLA_MAC_OUI;
 
 struct ttp_timer ttp_nh_mac_tmr = {.exp = TTP_NH_MAC_TRY_TMR, .max = 5};
 struct ttp_timer ttp_gw_ctl_tmr = {.exp = TTP_GW_CTL_ADV_TMR};
@@ -151,16 +151,14 @@ static void ttpip_pretty_print_data (const u8 *caption, bool tx,
 {
     int len = !trmlen ? buflen : trmlen;
 
-    if (ttp_verbose > 2) {
-        TTP_DBG ("%s %s dev: %s len: %d%s\n",
-                 caption, tx ? "<<- Tx" : "->> Rx", devname, buflen,
-                 (trmlen && (trmlen != buflen)) ? " (trimmed)" : "");
-        do {
-            TTP_DBG ("%s %*ph\n", caption, min (len, 16), buf);
-            buf += 16;
-            len -= 16;
-        } while (len > 0);
-    }
+    TTP_DB2 ("%s %s dev: %s len: %d%s\n",
+             caption, tx ? "<<- Tx" : "->> Rx", devname, buflen,
+             (trmlen && (trmlen != buflen)) ? " (trimmed)" : "");
+    do {
+        TTP_DB2 ("%s %*ph\n", caption, min (len, 16), buf);
+        buf += 16;
+        len -= 16;
+    } while (len > 0);
 }
 
 
@@ -1177,10 +1175,8 @@ static int ttp_nhmac_resolve (struct ttp_intf_cfg *zcfg)
     int rv = 0;
 
     if (is_valid_ether_addr (zcfg->mac)) {
-        if (ttp_verbose > 0) {
-            TTP_DBG ("%s: zn:%d has a valid gwmac:%*phC\n", __FUNCTION__,
-                     zcfg->zon, ETH_ALEN, zcfg->mac);
-        }
+        TTP_DBG ("%s: zn:%d has a valid gwmac:%*phC\n", __FUNCTION__,
+                 zcfg->zon, ETH_ALEN, zcfg->mac);
         goto end;
     }
     if (zcfg->ver == 4) {
@@ -1237,10 +1233,8 @@ static void ttp_gw_local_mac_learn (const char *mac)
             return;
         }
     }
-    if (ttp_verbose > 2) {
-        TTP_DBG ("%s: gw_mac_adv: zn:%d  mac:%*phC%s\n", __FUNCTION__, ttp_myzn,
-                 ETH_ALEN, mac, rv == EEXIST ? "" : " (new)");
-    }
+    TTP_DB2 ("%s: gw_mac_adv: zn:%d  mac:%*phC%s\n", __FUNCTION__, ttp_myzn,
+             ETH_ALEN, mac, rv == EEXIST ? "" : " (new)");
 }
 
 
@@ -1278,9 +1272,7 @@ static void ttp_gw_ctl_send (const char *mac, enum ttp_mac_opcodes oc)
                      __FUNCTION__, ETH_ALEN, mac, zn);
             return;
         }
-        if (ttp_verbose > 2) {
-            TTP_DBG ("%s: send mac:%*phC -> zn:%d\n", __FUNCTION__, ETH_ALEN, mac, zn);
-        }
+        TTP_DB2 ("%s: send mac:%*phC -> zn:%d\n", __FUNCTION__, ETH_ALEN, mac, zn);
 
         eth = (struct ethhdr *)skb_mac_header (skb);
         pkt = (u8 *)(eth + 1);
@@ -1328,9 +1320,7 @@ static void ttp_gw_ctl_send (const char *mac, enum ttp_mac_opcodes oc)
             ttpip_pretty_print_data ("raw:", true, skb->dev->name,
                                      (u8 *)eth, skb->len, 0);
         }
-        if (ttp_verbose > 2) {
-            TTP_DBG ("<<- Tx packet: (gw-ctrl) len:%d dev:%s\n", skb->len, skb->dev->name);
-        }
+        TTP_DB2 ("<<- Tx packet: (gw-ctrl) len:%d dev:%s\n", skb->len, skb->dev->name);
 
         skb_trim (skb, max (frame_len, TTP_MIN_FRAME_LEN));
         skb_reset_network_header (skb);
@@ -1357,8 +1347,8 @@ static void ttp_gw_ctl_recv (const char *mac, const struct ttp_tsla_shim_hdr *ts
 
     if (!ttp_zone_valid (zn)) {
         rv = ttp_mactbl_del (zn, mac, TTP_GW_CTL_OP_REMOTE_DEL);
-        if (rv && ttp_verbose > 2) {
-            TTP_DBG ("%s: Del %smac:%*phC from zone:%d\n", __FUNCTION__,
+        if (rv) {
+            TTP_DB2 ("%s: Del %smac:%*phC from zone:%d\n", __FUNCTION__,
                      oc == TTP_GW_CTL_OP_REMOTE_DEL ? "remote" : "gw", ETH_ALEN, mac, zn);
         }
         return;
@@ -1367,8 +1357,8 @@ static void ttp_gw_ctl_recv (const char *mac, const struct ttp_tsla_shim_hdr *ts
     switch ((oc)) {
     case TTP_GW_CTL_OP_REMOTE_DEL:
         rv = ttp_mactbl_del (zn, mac, TTP_GW_CTL_OP_REMOTE_DEL);
-        if (rv && ttp_verbose > 2) {
-            TTP_DBG ("%s: Del %smac:%*phC from zone:%d\n", __FUNCTION__,
+        if (rv) {
+            TTP_DB2 ("%s: Del %smac:%*phC from zone:%d\n", __FUNCTION__,
                      oc == TTP_GW_CTL_OP_REMOTE_DEL ? "remote" : "gw", ETH_ALEN, mac, zn);
         }
         break;
@@ -1379,10 +1369,8 @@ static void ttp_gw_ctl_recv (const char *mac, const struct ttp_tsla_shim_hdr *ts
                 TTP_LOG ("`-> Error: mac-table full (rv:%d)\n", rv);
             }
         }
-        if (ttp_verbose > 2) {
-            TTP_DBG ("%s: Add %smac:%*phC from zone:%d\n", __FUNCTION__,
-                     oc == TTP_GW_CTL_OP_REMOTE_ADD ? "" : "gw-", ETH_ALEN, mac, zn);
-        }
+        TTP_DB2 ("%s: Add %smac:%*phC from zone:%d\n", __FUNCTION__,
+                 oc == TTP_GW_CTL_OP_REMOTE_ADD ? "" : "gw-", ETH_ALEN, mac, zn);
         break;
     default:
         TTP_LOG ("%s: Invalid op(%d) mac:%*phC from zone %d\n",
@@ -1477,8 +1465,8 @@ static void ttp_gw_ctl_tmr_cb (struct timer_list *tl)
     skb->protocol = eth->h_proto;
     if (ttp_verbose > 2) {
         ttpip_pretty_print_data ("raw:", true, skb->dev->name, (u8 *)eth, skb->len, 0);
-        TTP_DBG ("<<- Tx packet: (gw-mac-adv) len:%d dev:%s\n", skb->len, skb->dev->name);
     }
+    TTP_DB2 ("<<- Tx packet: (gw-mac-adv) len:%d dev:%s\n", skb->len, skb->dev->name);
 
     skb_reset_network_header (skb);
     skb_reset_mac_header (skb);
@@ -1544,10 +1532,7 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
             goto end;
         }
     }
-    if (ttp_verbose > 0) {
-        TTP_DBG ("%s: ->> Rx frame: len:%d dev:%s\n", __FUNCTION__,
-                 skb->len, skb->dev->name);
-    }
+    TTP_DBG ("%s: ->> Rx frame: len:%d dev:%s\n", __FUNCTION__, skb->len, skb->dev->name);
 
     tth = (struct ttp_tsla_type_hdr *)(eth + 1);
     if (tth->tthl != TTP_PROTO_TTHL) {
@@ -1617,15 +1602,13 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     if (ttp_verbose > 1) {
         ttpip_pretty_print_data ("raw:", false, skb->dev->name, (u8 *)eth, skb->len,
                                  (skb->len > TTP_MAX_FRAME_LEN) ? 96 : 0);
-        TTP_DBG ("%s: found src-mac:%*phC src-zone:%d\n", __FUNCTION__,
-                 ETH_ALEN, mcs->mac, mcs->zon);
-        TTP_DBG ("%s: found dst-mac:%*phC tgt-zone:%d\n", __FUNCTION__,
-                 ETH_ALEN, mct->mac, mct->zon);
     }
-    if (ttp_verbose > 0) {
-        TTP_DBG ("->> Ingress gw: ttp->ipv%d zn:%d->%d len:%d dev:%s\n",
-                 zcfg->ver, zs, zt, skb->len, skb->dev->name);
-    }
+    TTP_DB1 ("%s: found src-mac:%*phC src-zone:%d\n", __FUNCTION__,
+             ETH_ALEN, mcs->mac, mcs->zon);
+    TTP_DB1 ("%s: found dst-mac:%*phC tgt-zone:%d\n", __FUNCTION__,
+             ETH_ALEN, mct->mac, mct->zon);
+    TTP_DBG ("->> Ingress gw: ttp->ipv%d zn:%d->%d len:%d dev:%s\n",
+             zcfg->ver, zs, zt, skb->len, skb->dev->name);
     if (ntohs (eth->h_proto) == ETH_P_IPV6) {
         TTP_LOG ("%s: Drop frame: EthType:0x%04x == IPv6 (late)\n", __FUNCTION__,
                  ntohs (eth->h_proto));
@@ -1679,10 +1662,10 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     skb_reset_network_header (skb);
     skb_reset_mac_header (skb);
 
-    ttpip_pretty_print_data ("raw:", true, skb->dev->name, (u8 *)eth, skb->len, 0);
-    if (ttp_verbose > 0) {
-        TTP_DBG ("<<- Tx packet: (ttp-gw) len:%d dev:%s\n", skb->len, skb->dev->name);
+    if (ttp_verbose > 1) {
+        ttpip_pretty_print_data ("raw:", true, skb->dev->name, (u8 *)eth, skb->len, 0);
     }
+    TTP_DBG ("<<- Tx packet: (ttp-gw) len:%d dev:%s\n", skb->len, skb->dev->name);
 
     dev_queue_xmit (skb);
     return 0;
@@ -1771,10 +1754,8 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
         goto end; /* drop silently */
     }
     if (tsh->length == htons (2)) { /* tsh length == 2 => control packet */
-        if (ttp_verbose > 2) {
-            TTP_DBG ("%s: ->> Rx (gw-ctrl) pkt: len:%d dev:%s\n", __FUNCTION__,
-                     skb->len, skb->dev->name);
-        }
+        TTP_DB2 ("%s: ->> Rx (gw-ctrl) pkt: len:%d dev:%s\n", __FUNCTION__,
+                 skb->len, skb->dev->name);
         ttpip_pretty_print_data ("raw:", false, skb->dev->name, (u8 *)eth, skb->len,
                                  (skb->len > TTP_MAX_FRAME_LEN) ? 96 : 0);
 
@@ -1783,9 +1764,8 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
         ttp_gw_ctl_recv (leh.h_dest, tsh);
         goto end; /* consume packet */
     }
-    if (ttp_verbose > 0) {
-        TTP_DBG ("%s: ->> Rx pkt: len:%d dev:%s\n", __FUNCTION__,
-                 skb->len, skb->dev->name);
+    TTP_DBG ("%s: ->> Rx pkt: len:%d dev:%s\n", __FUNCTION__, skb->len, skb->dev->name);
+    if (ttp_verbose) {
         ttpip_pretty_print_data ("raw:", false, skb->dev->name, (u8 *)eth, skb->len,
                                  (skb->len > TTP_MAX_FRAME_LEN) ? 96 : 0);
     }
@@ -1815,18 +1795,14 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
 
     /* Lookup src-mac addr in mactbl */
     if ((mcs = ttp_mactbl_find (leh.h_source))) {
-        if (ttp_verbose > 2) {
-            TTP_DBG ("%s: found src-mac:%*phC zn:%d\n", __FUNCTION__,
-                     ETH_ALEN, mcs->mac, mcs->zon);
-        }
+        TTP_DB2 ("%s: found src-mac:%*phC zn:%d\n", __FUNCTION__,
+                 ETH_ALEN, mcs->mac, mcs->zon);
         zs = mcs->zon;
     }
     /* Lookup dst-mac addr in mactbl */
     if ((mct = ttp_mactbl_find (leh.h_dest))) {
-        if (ttp_verbose > 2) {
-            TTP_DBG ("%s: found dst-mac:%*phC zn:%d\n", __FUNCTION__,
-                     ETH_ALEN, mct->mac, mct->zon);
-        }
+        TTP_DB2 ("%s: found dst-mac:%*phC zn:%d\n", __FUNCTION__,
+                 ETH_ALEN, mct->mac, mct->zon);
         zt = mct->zon;
     }
     if (!zs || !zt) {
@@ -1839,10 +1815,8 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
                  __FUNCTION__, zs);
         goto end;
     }
-    if (ttp_verbose > 0) {
-        TTP_DBG ("<<-- Egress gw: ttp<-ipv%d zn:%d<-%d len:%d dev:%s\n",
-                 ver, zt, zs, skb->len, skb->dev->name);
-    }
+    TTP_DBG ("<<-- Egress gw: ttp<-ipv%d zn:%d<-%d len:%d dev:%s\n",
+             ver, zt, zs, skb->len, skb->dev->name);
 
     /* update stats */
     mcs->r.frm++;
@@ -1853,9 +1827,7 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
     skb->dev = ttpip_etype_tsla.dev; /* forward frame to ttp-nodes within zone */
     skb->protocol = eth->h_proto;
     ttpip_pretty_print_data ("raw:", true, skb->dev->name, (u8 *)eth, skb->len, 0);
-    if (ttp_verbose > 0) {
-        TTP_DBG ("<<- Tx frame: len:%d dev:%s\n", skb->len, skb->dev->name);
-    }
+    TTP_DBG ("<<- Tx frame: len:%d dev:%s\n", skb->len, skb->dev->name);
 
     skb_reset_network_header (skb);
     skb_reset_mac_header (skb);

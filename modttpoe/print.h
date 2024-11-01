@@ -132,7 +132,7 @@ extern char *ttp_evlog_dir[];
 
 extern void ttpoe_pretty_print_data (const u8 *caption, const int bpl,
                                      const u8 *buf, const int buflen);
-extern void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_direction dir);
+extern void ttpoe_parse_print (const struct sk_buff *, enum ttp_frame_direction dir, int);
 
 static inline bool ttp_verbose_for_ctrl (int nl)
 {
