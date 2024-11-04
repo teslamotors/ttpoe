@@ -53,7 +53,7 @@ extern u8  ttp_nhmac[ETH_ALEN];
 #define TTP_NOC_DAT_SIZE  (TTP_NOC_BUF_SIZE - sizeof (struct ttp_ttpoe_noc_hdr))
 #define TTP_NOC_NUM_64B   (TTP_NOC_DAT_SIZE / sizeof (u64))
 
-extern struct packet_type ttpoe_etype_tesla;
+extern struct packet_type ttp_etype_dev;
 
 enum ttp_frame_direction {
     TTP_RX = 0,

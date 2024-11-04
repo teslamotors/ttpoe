@@ -324,7 +324,7 @@ static int ttp_param_encap_set (const char *val, const struct kernel_param *kp)
         return -EINVAL;
     }
     if ((ttp_ipv4_encap = vv)) { /* assign and check true */
-        ttpoe_etype_tesla.type = htons (ETH_P_IP);
+        ttp_etype_dev.type = htons (ETH_P_IP);
     }
 
     return 0;
@@ -415,22 +415,25 @@ static int ttp_param_prefix_set (const char *val, const struct kernel_param *kp)
     if (!ttp_ipv4_pfxlen) { /* default len = 8 if param not in CIDR notation */
         ttp_ipv4_pfxlen = 8;
     }
+
     ttp_ipv4_prefix &= inet_make_mask (ttp_ipv4_pfxlen);
     TTP_DB1 ("%s: set ttp ipv4-prefix: %pI4/%d\n", __FUNCTION__, &ttp_ipv4_prefix,
              ttp_ipv4_pfxlen);
-    if (!ttpoe_etype_tesla.dev) {
-        if (!(ttpoe_etype_tesla.dev = dev_get_by_name (&init_net, ttp_dev))) {
+
+    /* This can get called before __init when params are specified on mod-load cmdline */ 
+    if (!ttp_etype_dev.dev) {
+        if (!(ttp_etype_dev.dev = dev_get_by_name (&init_net, ttp_dev))) {
             TTP_LOG ("Error: Couldn't 'get' dev:%s - unloading\n", ttp_dev);
             return -ENODEV;
         }
         TTP_LOG ("'get' dev:%s - success mac:%*phC\n", ttp_dev, ETH_ALEN,
-                 ttpoe_etype_tesla.dev->dev_addr);
-        dev_put (ttpoe_etype_tesla.dev);
-        ether_addr_copy (ttp_debug_source.mac, ttpoe_etype_tesla.dev->dev_addr);
+                 ttp_etype_dev.dev->dev_addr);
+        dev_put (ttp_etype_dev.dev);
+        ether_addr_copy (ttp_debug_source.mac, ttp_etype_dev.dev->dev_addr);
         TTP_DBG ("%s: ttp-source:%*phC dev:%s\n", __FUNCTION__, ETH_ALEN,
-                 ttp_debug_source.mac, ttpoe_etype_tesla.dev->name);
+                 ttp_debug_source.mac, ttp_etype_dev.dev->name);
     }
-    ttp_param_scan_ipv4 (ttpoe_etype_tesla.dev);
+    ttp_param_scan_ipv4 (ttp_etype_dev.dev);
     return 0;
 }
 

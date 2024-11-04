@@ -107,7 +107,7 @@ int   ttp_ipv4_encap;
 static int ttpoe_skb_recv_func (struct sk_buff *, struct net_device *dev,
                                 struct packet_type *pt, struct net_device *odev);
 
-struct packet_type ttpoe_etype_tesla __read_mostly = {
+struct packet_type ttp_etype_dev __read_mostly = {
     .dev  = NULL,                      /* set via module-param 'dev' */
     .type = htons (TESLA_ETH_P_TTPOE), /* can change via module-param 'ipv4' at init */
     .func = ttpoe_skb_recv_func,
@@ -158,7 +158,7 @@ u8 *ttp_skb_aloc (struct sk_buff **skbp, int nl)
     skb_trim (skb, skb->len);
     skb_set_tail_pointer (skb, skb->len);
 
-    skb->dev = ttpoe_etype_tesla.dev;
+    skb->dev = ttp_etype_dev.dev;
 
     TTP_VBG ("%s: len:%d dev:%s etype:0x%04x\n", __FUNCTION__,
              skb->len, skb->dev->name, htons (skb->protocol));
@@ -230,7 +230,7 @@ static void ttp_setup_ethhdr (struct ethhdr *eth, const u8 *dmac_low, const u8 *
 
     BUG_ON (!(eth && (dmac_low || nhmac)));
 
-    memmove (eth->h_source, ttpoe_etype_tesla.dev->dev_addr, ETH_ALEN);
+    memmove (eth->h_source, ttp_etype_dev.dev->dev_addr, ETH_ALEN);
 
     if (dmac_low) {
         eth->h_dest[0] = Tesla_Mac_Oui0;
@@ -609,7 +609,7 @@ static bool ttp_skb_net_setup (struct sk_buff *skb, struct ttp_link_tag *lt, u16
         memmove (frh.tsh->src_node, (u8 *)&node + 1, ETH_ALEN/2);
     }
     else {
-        memmove (frh.tsh->src_node, &ttpoe_etype_tesla.dev->dev_addr[3], ETH_ALEN/2);
+        memmove (frh.tsh->src_node, &ttp_etype_dev.dev->dev_addr[3], ETH_ALEN/2);
     }
     if (lt) {
         memmove (frh.tsh->dst_node, lt->mac, ETH_ALEN/2);
@@ -711,7 +711,7 @@ static int ttp_skb_recv (struct sk_buff *skb)
     }
 
     eth = (struct ethhdr *)skb_mac_header (skb);
-    if (!ether_addr_equal (eth->h_dest, ttpoe_etype_tesla.dev->dev_addr)) {
+    if (!ether_addr_equal (eth->h_dest, ttp_etype_dev.dev->dev_addr)) {
         if (skb->protocol != htons (TESLA_ETH_P_TTPOE)) {
             TTP_LOG ("%s: UNEXPECTED ether-type: 0x%04x\n", __FUNCTION__,
                      ntohs (skb->protocol));
@@ -777,9 +777,9 @@ static int ttpoe_skb_recv_func (struct sk_buff *skb, struct net_device *dev,
 TTP_NOINLINE
 static int __init ttpoe_oui_detect (void)
 {
-    if ((ttpoe_etype_tesla.dev->dev_addr[0] == TESLA_MAC_OUI0) &&
-        (ttpoe_etype_tesla.dev->dev_addr[1] == TESLA_MAC_OUI1) &&
-        (ttpoe_etype_tesla.dev->dev_addr[2] == TESLA_MAC_OUI2))
+    if ((ttp_etype_dev.dev->dev_addr[0] == TESLA_MAC_OUI0) &&
+        (ttp_etype_dev.dev->dev_addr[1] == TESLA_MAC_OUI1) &&
+        (ttp_etype_dev.dev->dev_addr[2] == TESLA_MAC_OUI2))
     {
         return 0;
     }
@@ -799,13 +799,13 @@ static int __init ttpoe_init (void)
     }
 #endif
 
-    if (!ttp_dev || (!(ttpoe_etype_tesla.dev = dev_get_by_name (&init_net, ttp_dev)))) {
+    if (!ttp_dev || (!(ttp_etype_dev.dev = dev_get_by_name (&init_net, ttp_dev)))) {
         TTP_LOG ("Error: Couldn't 'get' dev:%s - unloading\n", ttp_dev ?: "<unspec>");
         return -ENODEV;
     }
-    dev_put (ttpoe_etype_tesla.dev);
+    dev_put (ttp_etype_dev.dev);
 
-    if (!(ttpoe_etype_tesla.dev->flags & IFF_UP)) {
+    if (!(ttp_etype_dev.dev->flags & IFF_UP)) {
         TTP_LOG ("Error: Device dev (%s) is DOWN - unloading\n", ttp_dev);
         return -ENETDOWN;
     }
@@ -832,10 +832,10 @@ static int __init ttpoe_init (void)
         TTP_DBG ("%s: ttp-source:%*phC mytag:[0x%016llx]\n"
                  "       dev:%s nhmac:%*phC ipv4:%d\n", __FUNCTION__, ETH_ALEN,
                  ttp_debug_source.mac, cpu_to_be64 (me),
-                 ttpoe_etype_tesla.dev->name, ETH_ALEN, ttp_nhmac, ttp_ipv4_encap);
+                 ttp_etype_dev.dev->name, ETH_ALEN, ttp_nhmac, ttp_ipv4_encap);
     }
 
-    dev_add_pack (&ttpoe_etype_tesla);
+    dev_add_pack (&ttp_etype_dev);
 
     TTP_EVLOG (NULL, TTP_LG__TTP_INIT, TTP_OP__invalid);
 
@@ -850,7 +850,7 @@ TTP_NOINLINE
 static void __exit ttpoe_exit (void)
 {
     ttp_shutdown = 1;
-    dev_remove_pack (&ttpoe_etype_tesla);
+    dev_remove_pack (&ttp_etype_dev);
     ttp_fsm_exit ();
     ttpoe_noc_debug_exit ();
     ttpoe_proc_exit ();

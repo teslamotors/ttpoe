@@ -41,9 +41,9 @@ selfHost = ""
 peerHost = ""
 macUpper = "98:ed:5c"
 peerMacL = ""
-peerMacA = ""
+peerTgt  = ""
 selfMac  = ""
-selfMacA = ""
+selfTgt  = ""
 selfDev  = ""
 peerDev  = ""
 selfLock = ""
@@ -69,8 +69,8 @@ def selfHostname():
                            stdout=subprocess.PIPE).stdout.decode().strip()
 
 def peerHostname (mac):
-    if ((mac[0] != '0') or (mac[1] != '0') or (mac[2] != ':') or
-        (mac[3] != '0') or (mac[4] != '0') or (mac[5] != ':')):
+    if mac[0] != '0' or mac[1] != '0' or mac[2] != ':' or \
+       mac[3] != '0' or mac[4] != '0' or mac[5] != ':':
         print (f"Warning: Cannot resolve target={options.target} to hostname")
         return "node-unknown"
     else:
@@ -80,10 +80,9 @@ def setUpModule():
     global peerHost
     global macUpper
     global peerMacL
-    global peerMacA
-    global selfMacL
+    global peerTgt
     global selfMac
-    global selfMacA
+    global selfTgt
     global selfDev
     global peerDev
     global selfLock
@@ -106,10 +105,6 @@ def setUpModule():
         print (f"v---------------------------------------v")
         print (f" Start tests: {datetime.now()}")
         print (f"     Verbose: {verbose}")
-    if options.self_dev:
-        selfDev = options.self_dev
-        if verbose:
-            print (f"     SelfDev: {selfDev} (override)")
     if options.ipv4:
         ipv4Arg = 1
         if verbose:
@@ -126,54 +121,67 @@ def setUpModule():
             print (f"   TTP Encap: ttpoe (etype: 0x9ac6)")
         if not options.self_dev:
             selfDev = getDefaultEthDev()
-    if verbose and not options.self_dev:
-        print (f"     selfDev: {selfDev} (default)")
-    if (not options.target):
+    if verbose:
+        if options.vci:
+            print (f"    Conn VCI: {connVCI} (override)")
+        elif verbose == 2:
+            print (f"    Conn VCI: 0 (default)")
+    if options.self_dev:
+        selfDev = options.self_dev
+        if verbose:
+            print (f"     SelfDev: {selfDev} (override)")
+    else:
+        if verbose == 2:
+            print (f"     selfDev: {selfDev} (default)")
+    if not options.target:
         print (f"Error: Missing --target")
         sys.exit (-1)
     if options.ipv4 and options.use_gw:
         print (f"Error: Cannot combine option '--use-gw' with '--ipv4' option")
         sys.exit (-1)
-    if (options.vci):
+    if options.vci:
         connVCI = options.vci
-    if (connVCI != "0" and connVCI != "1" and connVCI != "2"):
+    if connVCI != "0" and connVCI != "1" and connVCI != "2":
         print (f"Error: Invalid vci {connVCI}")
         sys.exit (-1)
 
-    cmd = (f"ip -j link show dev {selfDev}")
+    cmd = f"ip -j link show dev {selfDev}"
     out = subprocess.run (str.split (cmd), stdout=subprocess.PIPE)
-    if (out.returncode):
+    if out.returncode:
         print (f"Error: {cmd} failed")
         sys.exit (-1)
     selfMac = json.loads (str(out.stdout, encoding='utf-8'))[0]["address"]
+    if verbose:
+        print (f"    Self MAC: {selfMac}")
     jstr = selfMac.split(':')
-    # check Tesla OUI only for ttpoe/ethernet mode (+gw mode): Skip for ipv4 encap
-    if not options.ipv4:
-        if ((jstr[-6] != "98") and (jstr[-5] != "ed") and (jstr[-4] != "5c")):
+    if options.ipv4:
+        selfTgt = f"0000{jstr[-1]}"
+    else: # check Tesla OUI only for ttpoe/ethernet mode (+gw mode): Skip for ipv4 encap
+        selfTgt = f"{jstr[-3]}{jstr[-2]}{jstr[-1]}"
+        if jstr[-6] != "98" and jstr[-5] != "ed" and jstr[-4] != "5c":
             print (f"Error: '{selfDev}' is not a TTP device: {selfMac}")
             sys.exit (-1)
-    selfMacA = f"{jstr[-3]}{jstr[-2]}{jstr[-1]}"
 
     targ = options.target.split(':')
-    if (len(targ) == 1):
+    if len(targ) == 1:
         peerMacL = ":00:00"
-        peerMacA = "0000"
-    elif (len(targ) == 2):
+        peerTgt  = "0000"
+    elif len(targ) == 2:
         peerMacL = ":00"
-        peerMacA = "00"
-    elif (len(targ) == 3):
+        peerTgt  = "00"
+    elif len(targ) == 3:
         peerMacL = ""
-        peerMacA = ""
+        peerTgt  = ""
     else:
         print (f"Error: Bad --target='{options.target}'")
         sys.exit (-1)
     for tt in targ:
-        if (len(tt) == 1):
+        if len(tt) == 1:
             peerMacL = f"{peerMacL}:0{tt}"
-            peerMacA = f"{peerMacA}0{tt}"
-        elif (len(tt) == 2):
+            peerTgt  = f"{peerTgt}0{tt}"
+        elif len(tt) == 2:
             peerMacL = f"{peerMacL}:{tt}"
-            peerMacA = f"{peerMacA}{tt}"
+            peerTgt  = f"{peerTgt}{tt}"
         else:
             print (f"Error: Bad --target='{options.target}'")
             sys.exit (-1)
@@ -183,13 +191,13 @@ def setUpModule():
         peerHost = peerHostname (peerMacL)
     else:
         print (f"--no-remote: skipping ssh remote '{peerHost}'")
-    if (peerHost == selfHost):
+    if peerHost == selfHost:
         print (f"Error: Self --target='{options.target}'")
         sys.exit (-1)
     if os.path.exists ("/dev/noc_debug"):
         po = subprocess.run (['file', '/dev/noc_debug'],
                              stdout=subprocess.PIPE).stdout.decode().strip()
-        if ("character special (446/0)" not in po):
+        if "character special (446/0)" not in po:
             os.system (f"ls -al /dev/noc_debug")
             print (f"Error: 'self' /dev/noc_debug not 'char' dev (446/0)\n"
                    "HINT: '/dev/noc_debug' may be a plain text file - remove it")
@@ -197,10 +205,10 @@ def setUpModule():
     if peerHost:
         po = subprocess.run (['ssh', peerHost, 'ls', '/dev/noc_debug', '2>/dev/null'],
                              stdout=subprocess.PIPE).stdout.decode().strip()
-        if ("/dev/noc_debug" in po):
+        if "/dev/noc_debug" in po:
             po = subprocess.run (['ssh', peerHost, 'file', '/dev/noc_debug'],
                                  stdout=subprocess.PIPE).stdout.decode().strip()
-            if ("character special (446/0)" not in po):
+            if "character special (446/0)" not in po:
                 os.system (f"ssh {peerHost} 'ls -al /dev/noc_debug'")
                 print (f"Error: 'peer' /dev/noc_debug not 'char' dev (446/0)\n"
                        "HINT: '/dev/noc_debug' may be a plain text file - remove it")
@@ -221,56 +229,42 @@ def setUpModule():
             os.remove (selfLock)
             sys.exit (-1)
     if verbose:
+        print (f" Self Target: {selfTgt}")
         print (f"   Self Host: {selfHost}")
-        print (f"    MAC addr: {selfMac}")
-        print (f"   Peer Host: {peerHost}")
-        print (f"  L MAC addr: {macUpper}:{peerMacL}")
-        print (f"  A MAC addr: {macUpper}:{peerMacA}")
-        if options.vci:
-            print (f"    Conn VCI: {connVCI}")
-        else:
-            if verbose == 2:
-                print (f"    Conn VCI: 0 (default)")
-    if (options.peer_dev):
+    if options.peer_dev:
         peerDev = options.peer_dev
         if verbose:
             print (f"     PeerDev: {peerDev} (override)")
-    elif options.ipv4:
-        peerDev = getDefaultIP4Dev()
     else:
-        peerDev = getDefaultEthDev()
-    if verbose and not options.peer_dev:
-        print (f"     PeerDev: {peerDev} (default)")
+        if options.ipv4:
+            peerDev = getDefaultIP4Dev()
+        else:
+            peerDev = getDefaultEthDev()
+        if verbose == 2:
+            print (f"     PeerDev: {peerDev} (default)")
+    if verbose:
+        print (f"    Peer MAC: {macUpper}:{peerMacL}")
+        print (f" Peer Target: {peerTgt}")
+        print (f"   Peer Host: {peerHost}")
     if peerHost:
         rv = os.system (f"ssh {peerHost} 'ifconfig {peerDev} 1>/dev/null'")
-        if (rv != 0):
+        if rv != 0:
             print (f"Error: Peer device '{peerDev}' not found")
             os.remove (selfLock)
             os.remove (peerLock)
             sys.exit (-1)
-    if (options.no_load):
+    if options.no_load:
         print (f"Skipping local module reload in setup:-")
     else:
         rv = os.system (f"sudo insmod /mnt/mac/modttpoe.ko"
                         f" verbose={verbose} dev={selfDev} ipv4={ipv4Arg}")
-        if (rv != 0):
+        if rv != 0:
             print (f"Error: 'insmod modttpoe' on 'self' failed")
             os.remove (selfLock)
             os.remove (peerLock)
             sys.exit (-1)
         if verbose:
-            if verbose == 2:
-                print (f" Use Gateway: {options.use_gw}")
-            elif options.use_gw:
-                print (f" Use Gateway: True")
-        if verbose:
-            pf = open (f"/sys/module/modttpoe/parameters/ipv4", "r")
-            pfo = int (pf.read().strip())
-            pf.close()
-            if pfo:
-                print (f"   TTP Encap: ipv4 (etype: 0x0800)")
-            else:
-                print (f"   TTP Encap: ttpoe (etype: 0x9ac6)")
+            print (f" Use Gateway: {options.use_gw}")
         if options.ipv4:
             os.system (f"echo {prefix} | sudo tee {modpath}/prefix 1>/dev/null")
         if verbose and options.ipv4:
@@ -281,12 +275,12 @@ def setUpModule():
         if options.ipv4: # set target to allow nhmac to resolve below
             if options.vci: # set 'vc' before setting 'target'
                 rv = os.system (f"echo {connVCI} | sudo tee {modpath}/vci 1>/dev/null")
-                if (rv != 0):
+                if rv != 0:
                     print (f"Error: Set vci on 'self' failed")
                     tearDownModule()
                     sys.exit (-1)
-            rv = os.system (f"echo {peerMacA} | sudo tee {modpath}/target 1>/dev/null")
-            if (rv != 0):
+            rv = os.system (f"echo {peerTgt} | sudo tee {modpath}/target 1>/dev/null")
+            if rv != 0:
                 print (f"Error: Set target on 'self' failed")
                 tearDownModule()
                 sys.exit (-1)
@@ -294,15 +288,15 @@ def setUpModule():
             pf = open (f"/sys/module/modttpoe/parameters/ipv4_sip", "r")
             pfo = pf.read().strip()
             pf.close()
-            print (f"  `-> src-ip: {pfo}")
+            print (f"     Self IP: {pfo} [param: ipv4_sip]")
         if verbose and options.ipv4:
             pf = open (f"/sys/module/modttpoe/parameters/ipv4_dip", "r")
             pfo = pf.read().strip()
             pf.close()
-            print (f"  `-> dst-ip: {pfo}")
+            print (f"     Peer IP: {pfo} [param: ipv4_dip]")
 
         lct = 10
-        while ((options.use_gw or options.ipv4) and lct):
+        while (options.use_gw or options.ipv4) and lct:
             pf = open (f"/sys/module/modttpoe/parameters/nhmac", "r")
             nhmac = pf.read().strip()
             pf.close()
@@ -314,7 +308,7 @@ def setUpModule():
                 continue
             rv = os.system (f"echo 1 |"
                             f" sudo tee {modpath}/use_gw 1>/dev/null")
-            if (rv != 0):
+            if rv != 0:
                 print (f"Error: Set use_gw on 'self' failed")
                 tearDownModule()
                 sys.exit (-1)
@@ -337,12 +331,12 @@ def setUpModule():
         if not options.ipv4: # set target after nhmac resolve above
             if options.vci: # set 'vc' before setting 'target'
                 rv = os.system (f"echo {connVCI} | sudo tee {modpath}/vci 1>/dev/null")
-                if (rv != 0):
+                if rv != 0:
                     print (f"Error: Set vci on 'self' failed")
                     tearDownModule()
                     sys.exit (-1)
-            rv = os.system (f"echo {peerMacA} | sudo tee {modpath}/target 1>/dev/null")
-            if (rv != 0):
+            rv = os.system (f"echo {peerTgt} | sudo tee {modpath}/target 1>/dev/null")
+            if rv != 0:
                 print (f"Error: Set target on 'self' failed")
                 tearDownModule()
                 sys.exit (-1)
@@ -355,26 +349,26 @@ def setUpModule():
             print (f"     Tag Seq: {tagSeqi} (override)")
     elif verbose == 2:
         print (f"     Tag Seq: {tagSeqi} (default)")
-    if (options.no_load):
+    if options.no_load:
         print (f"Skipping peer module reload in setup:-")
     else:
         if peerHost:
             rv = os.system (f"ssh {peerHost} 'sudo insmod /mnt/mac/modttpoe.ko"
                             f" verbose={verbose} dev={peerDev} ipv4={ipv4Arg}'")
-            if (rv != 0):
+            if rv != 0:
                 print (f"Error: 'insmod modttpoe' on 'peer' failed")
                 os.system ("sudo rmmod modttpoe 1>/dev/null")
                 os.remove (selfLock)
                 os.remove (peerLock)
                 sys.exit (-1)
-        if (options.use_gw):
+        if options.use_gw:
             time.sleep (2) # to allow for gw-mac resolve on peer and remote-mac-adv
         else:
             time.sleep (0.5) # to allow peer module to settle down
         if options.ipv4:
             os.system (f"ssh {peerHost} 'echo {prefix} |"
                        f" sudo tee {modpath}/prefix 1>/dev/null'")
-    if (0): # exit early control (change 0 --> 1 to enable)
+    if 0: # exit early control (change 0 --> 1 to enable)
         if verbose:
             print (f"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
             tearDownModule()
@@ -386,7 +380,7 @@ def tearDownModule():
         print (f"**** Waiting 10 sec before tear-down:-\n"
                f" Hit ^C to stop and examine state before modules are unloaded")
         time.sleep (10)
-    if (options.no_unload):
+    if options.no_unload:
         print (f"Skipping local and peer module unload in tear-down:-")
     else:
         os.system (f"sudo rmmod modttpoe 1>/dev/null")
@@ -413,7 +407,7 @@ class Test0_Seq_IDs (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test2_tx1_seq (self):
-        if (options.no_load):
+        if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -456,19 +450,19 @@ class Test0_Seq_IDs (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test3_rx1_seq (self):
-        if (options.no_load):
+        if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
         if options.vci: # set 'vc' before setting 'target'
             rv = os.system (f"ssh {peerHost} 'echo {connVCI} "
                             f" | sudo tee {modpath}/vci 1>/dev/null'")
-            if (rv != 0):
+            if rv != 0:
                 self.fail (f"Error: Set vci {connVCI} on 'peer' failed")
-        rv = os.system (f"ssh {peerHost} 'echo {selfMacA} "
+        rv = os.system (f"ssh {peerHost} 'echo {selfTgt} "
                         f" | sudo tee {modpath}/target 1>/dev/null'")
-        if (rv != 0):
-            self.fail (f"Error: Set target {selfMacA} on 'peer' failed")
+        if rv != 0:
+            self.fail (f"Error: Set target {selfTgt} on 'peer' failed")
 
         os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
         os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet |"
@@ -541,7 +535,7 @@ class Test1_Proc (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test3_debug__500 (self):
-        if (options.no_load):
+        if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -557,7 +551,7 @@ class Test1_Proc (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test4_debug_1000 (self):
-        if (options.no_load):
+        if options.no_load:
             self.skipTest ("requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -573,7 +567,7 @@ class Test1_Proc (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test5_debug_2000 (self):
-        if (options.no_load):
+        if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -589,7 +583,7 @@ class Test1_Proc (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test6_debug_3000 (self):
-        if (options.no_load):
+        if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -605,7 +599,7 @@ class Test1_Proc (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test7_debug_4000 (self):
-        if (options.no_load):
+        if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -624,7 +618,7 @@ class Test1_Proc (unittest.TestCase):
 class Test2_Packet (unittest.TestCase):
 
     def test1_get_open (self):
-        if (options.no_packet):
+        if options.no_packet:
             self.skipTest (f"no packet tests")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -636,8 +630,8 @@ class Test2_Packet (unittest.TestCase):
                    f" -D SRC_MAC=\"{macUpper}:{peerMacL}\""
                    f" -D SVTR=5"
                    f" -D TOTLN=\"c16(46)\""
-                   f" -D SRC_NODE=\"0,0,x{selfMacA}\""
-                   f" -D DST_NODE=\"0,0,x{peerMacA}\""
+                   f" -D SRC_NODE=\"0,0,x{selfTgt}\""
+                   f" -D DST_NODE=\"0,0,x{peerTgt}\""
                    f" -D NOCLN=\"c16(26)\""
                    f" -D CODE=0"
                    f" -D VCID=\"c8({connVCI})\""
@@ -658,7 +652,7 @@ class Test2_Packet (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test2_snd_open (self):
-        if (options.no_packet):
+        if options.no_packet:
             self.skipTest (f"no packet tests")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -669,8 +663,8 @@ class Test2_Packet (unittest.TestCase):
                    f" -D SRC_MAC=\"{selfMac}\""
                    f" -D SVTR=5"
                    f" -D TOTLN=\"c16(46)\""
-                   f" -D SRC_NODE=\"0,0,x{selfMacA}\""
-                   f" -D DST_NODE=\"0,0,x{peerMacA}\""
+                   f" -D SRC_NODE=\"0,0,x{selfTgt}\""
+                   f" -D DST_NODE=\"0,0,x{peerTgt}\""
                    f" -D NOCLN=\"c16(26)\""
                    f" -D CODE=0"
                    f" -D VCID=\"c8({connVCI})\""
@@ -691,38 +685,39 @@ class Test2_Packet (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test3_get_pyld (self):
-        if (options.no_packet):
+        if options.no_packet:
             self.skipTest (f"no packet tests")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost}"
-                   f" 'cd /tmp; sudo trafgen -p -o {peerDev}"
-                   f" -i /mnt/mac/tests/ttp_common.cfg -n 5 -t 100ms"
-                   f" -D DST_MAC=\"{selfMac}\""
-                   f" -D SRC_MAC=\"{macUpper}:{peerMacL}\""
-                   f" -D SVTR=5"
-                   f" -D TOTLN=\"c16(690)\""
-                   f" -D SRC_NODE=\"0,0,x{selfMacA}\""
-                   f" -D DST_NODE=\"0,0,x{peerMacA}\""
-                   f" -D NOCLN=\"c16(670)\""
-                   f" -D CODE=6"
-                   f" -D VCID=\"c8({connVCI})\""
-                   f" -D TXID=\"c32(2)\" "
-                   f" -D RXID=\"c32(1)\" "
-                   f" -D PAYLOAD=\\\""
-                   f"Wikipedia\\ is\\ an\\ online\\ open-content\\ collaborative\\ encyclopedia,"
-                   f"\\ that\\ is,\\ a\\ voluntary\\ association\\ of\\ individuals\\ and\\ groups"
-                   f"\\ working\\ to\\ develop\\ a\\ common\\ resource\\ of\\ human\\ knowledge."
-                   f"\\ The\\ structure\\ of\\ the\\ project\\ allows\\ anyone\\ with\\ an\\ Internet"
-                   f"\\ connection\\ to\\ alter\\ its\\ content.\\ Please\\ be\\ advised\\ that"
-                   f"\\ nothing\\ found\\ here\\ has\\ necessarily\\ been\\ reviewed\\ by\\ people"
-                   f"\\ with\\ the\\ expertise\\ required\\ to\\ provide\\ you\\ with\\ complete,"
-                   f"\\ accurate,\\ or\\ reliable\\ information.\\ That\\ is\\ not\\ to\\ say\\ that"
-                   f"\\ you\\ will\\ not\\ find\\ valuable\\ and\\ accurate\\ information\\ in"
-                   f"\\ Wikipedia,\\ much\\ of\\ the\\ time\\ you\\ will.\\ However,\\ Wikipedia"
-                   f"\\ cannot\\ guarantee\\ the\\ validity\\ of\\ the\\ information\\ found\\ here."
-                   f"\\\" > /dev/null'")
+        os.system
+        (f"ssh {peerHost}"
+         f" 'cd /tmp; sudo trafgen -p -o {peerDev}"
+         f" -i /mnt/mac/tests/ttp_common.cfg -n 5 -t 100ms"
+         f" -D DST_MAC=\"{selfMac}\""
+         f" -D SRC_MAC=\"{macUpper}:{peerMacL}\""
+         f" -D SVTR=5"
+         f" -D TOTLN=\"c16(690)\""
+         f" -D SRC_NODE=\"0,0,x{selfTgt}\""
+         f" -D DST_NODE=\"0,0,x{peerTgt}\""
+         f" -D NOCLN=\"c16(670)\""
+         f" -D CODE=6"
+         f" -D VCID=\"c8({connVCI})\""
+         f" -D TXID=\"c32(2)\" "
+         f" -D RXID=\"c32(1)\" "
+         f" -D PAYLOAD=\\\""
+         f"Wikipedia\\ is\\ an\\ online\\ open-content\\ collaborative\\ encyclopedia,"
+         f"\\ that\\ is,\\ a\\ voluntary\\ association\\ of\\ individuals\\ and\\ groups"
+         f"\\ working\\ to\\ develop\\ a\\ common\\ resource\\ of\\ human\\ knowledge."
+         f"\\ The\\ structure\\ of\\ the\\ project\\ allows\\ anyone\\ with\\ Internet"
+         f"\\ connection\\ to\\ alter\\ its\\ content.\\ Please\\ be\\ advised\\ that"
+         f"\\ nothing\\ found\\ here\\ has\\ necessarily\\ been\\ reviewed\\ by\\ people"
+         f"\\ with\\ the\\ expertise\\ required\\ to\\ provide\\ you\\ with\\ complete,"
+         f"\\ accurate\\ or\\ reliable\\ information.\\ That\\ is\\ not\\ to\\ say\\ that"
+         f"\\ you\\ will\\ not\\ find\\ valuable\\ and\\ accurate\\ information\\ in"
+         f"\\ Wikipedia,\\ much\\ of\\ the\\ time\\ you\\ will.\\ However,\\ Wikipedia"
+         f"\\ cannot\\ guarantee\\ the\\ validity\\ of\\ the\\ information\\ found\\ here"
+         f"\\\" > /dev/null'")
         time.sleep (0.1)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
@@ -735,37 +730,38 @@ class Test2_Packet (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test4_snd_pyld (self):
-        if (options.no_packet):
+        if options.no_packet:
             self.skipTest (f"no packet tests")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"cd /tmp; sudo trafgen -p -o {selfDev}"
-                   f" -i /mnt/mac/tests/ttp_common.cfg -n 5 -t 100ms"
-                   f" -D DST_MAC=\"{macUpper}:{peerMacL}\""
-                   f" -D SRC_MAC=\"{selfMac}\""
-                   f" -D SVTR=5"
-                   f" -D TOTLN=\"c16(690)\""
-                   f" -D SRC_NODE=\"0,0,x{selfMacA}\""
-                   f" -D DST_NODE=\"0,0,x{peerMacA}\""
-                   f" -D NOCLN=\"c16(670)\""
-                   f" -D CODE=6"
-                   f" -D VCID=\"c8({connVCI})\""
-                   f" -D TXID=\"c32(2)\" "
-                   f" -D RXID=\"c32(1)\" "
-                   f" -D PAYLOAD=\\\""
-                   f"Wikipedia\\ is\\ an\\ online\\ open-content\\ collaborative\\ encyclopedia,"
-                   f"\\ that\\ is,\\ a\\ voluntary\\ association\\ of\\ individuals\\ and\\ groups"
-                   f"\\ working\\ to\\ develop\\ a\\ common\\ resource\\ of\\ human\\ knowledge."
-                   f"\\ The\\ structure\\ of\\ the\\ project\\ allows\\ anyone\\ with\\ an\\ Internet"
-                   f"\\ connection\\ to\\ alter\\ its\\ content.\\ Please\\ be\\ advised\\ that"
-                   f"\\ nothing\\ found\\ here\\ has\\ necessarily\\ been\\ reviewed\\ by\\ people"
-                   f"\\ with\\ the\\ expertise\\ required\\ to\\ provide\\ you\\ with\\ complete,"
-                   f"\\ accurate,\\ or\\ reliable\\ information.\\ That\\ is\\ not\\ to\\ say\\ that"
-                   f"\\ you\\ will\\ not\\ find\\ valuable\\ and\\ accurate\\ information\\ in"
-                   f"\\ Wikipedia,\\ much\\ of\\ the\\ time\\ you\\ will.\\ However,\\ Wikipedia"
-                   f"\\ cannot\\ guarantee\\ the\\ validity\\ of\\ the\\ information\\ found\\ here."
-                   f"\\\" > /dev/null")
+        os.system
+        (f"cd /tmp; sudo trafgen -p -o {selfDev}"
+         f" -i /mnt/mac/tests/ttp_common.cfg -n 5 -t 100ms"
+         f" -D DST_MAC=\"{macUpper}:{peerMacL}\""
+         f" -D SRC_MAC=\"{selfMac}\""
+         f" -D SVTR=5"
+         f" -D TOTLN=\"c16(690)\""
+         f" -D SRC_NODE=\"0,0,x{selfTgt}\""
+         f" -D DST_NODE=\"0,0,x{peerTgt}\""
+         f" -D NOCLN=\"c16(670)\""
+         f" -D CODE=6"
+         f" -D VCID=\"c8({connVCI})\""
+         f" -D TXID=\"c32(2)\" "
+         f" -D RXID=\"c32(1)\" "
+         f" -D PAYLOAD=\\\""
+         f"Wikipedia\\ is\\ an\\ online\\ open-content\\ collaborative\\ encyclopedia,"
+         f"\\ that\\ is,\\ a\\ voluntary\\ association\\ of\\ individuals\\ and\\ groups"
+         f"\\ working\\ to\\ develop\\ a\\ common\\ resource\\ of\\ human\\ knowledge."
+         f"\\ The\\ structure\\ of\\ the\\ project\\ allows\\ anyone\\ with\\ Internet"
+         f"\\ connection\\ to\\ alter\\ its\\ content.\\ Please\\ be\\ advised\\ that"
+         f"\\ nothing\\ found\\ here\\ has\\ necessarily\\ been\\ reviewed\\ by\\ people"
+         f"\\ with\\ the\\ expertise\\ required\\ to\\ provide\\ you\\ with\\ complete,"
+         f"\\ accurate\\ or\\ reliable\\ information.\\ That\\ is\\ not\\ to\\ say\\ that"
+         f"\\ you\\ will\\ not\\ find\\ valuable\\ and\\ accurate\\ information\\ in"
+         f"\\ Wikipedia,\\ much\\ of\\ the\\ time\\ you\\ will.\\ However,\\ Wikipedia"
+         f"\\ cannot\\ guarantee\\ the\\ validity\\ of\\ the\\ information\\ found\\ here"
+         f"\\\" > /dev/null")
         time.sleep (0.1)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
@@ -780,11 +776,11 @@ class Test2_Packet (unittest.TestCase):
     def test5_get_clos (self):
         if options.ipv4:
             self.skipTest (f"--ipv4 specified")
-        if (options.no_packet):
+        if options.no_packet:
             self.skipTest (f"--no-packet specified")
-        if (options.use_gw):
+        if options.use_gw:
             self.skipTest (f"--use_gw specified")
-        if (options.no_load):
+        if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -796,8 +792,8 @@ class Test2_Packet (unittest.TestCase):
                    f" -D SRC_MAC=\"{macUpper}:{peerMacL}\""
                    f" -D SVTR=5"
                    f" -D TOTLN=\"c16(46)\""
-                   f" -D SRC_NODE=\"0,0,x{peerMacA}\""
-                   f" -D DST_NODE=\"0,0,x{selfMacA}\""
+                   f" -D SRC_NODE=\"0,0,x{peerTgt}\""
+                   f" -D DST_NODE=\"0,0,x{selfTgt}\""
                    f" -D NOCLN=\"c16(26)\""
                    f" -D CODE=3"
                    f" -D VCID=\"c8({connVCI})\""
@@ -820,11 +816,11 @@ class Test2_Packet (unittest.TestCase):
     def test6_snd_clos (self):
         if options.ipv4:
             self.skipTest (f"--ipv4 specified")
-        if (options.no_packet):
+        if options.no_packet:
             self.skipTest (f"--no-packet specified")
-        if (options.use_gw):
+        if options.use_gw:
             self.skipTest (f"--use_gw specified")
-        if (options.no_load):
+        if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -835,8 +831,8 @@ class Test2_Packet (unittest.TestCase):
                    f" -D SRC_MAC=\"{selfMac}\""
                    f" -D SVTR=5"
                    f" -D TOTLN=\"c16(46)\""
-                   f" -D SRC_NODE=\"0,0,x{selfMacA}\""
-                   f" -D DST_NODE=\"0,0,x{peerMacA}\""
+                   f" -D SRC_NODE=\"0,0,x{selfTgt}\""
+                   f" -D DST_NODE=\"0,0,x{peerTgt}\""
                    f" -D NOCLN=\"c16(26)\""
                    f" -D CODE=3"
                    f" -D VCID=\"c8({connVCI})\""
@@ -891,7 +887,7 @@ class Test4_Traffic (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test1_traffic (self):
-        if (options.no_traffic):
+        if options.no_traffic:
             self.skipTest (f"no traffic")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -902,11 +898,11 @@ class Test4_Traffic (unittest.TestCase):
         os.system (f"cat /mnt/mac/tests/500 | sudo tee /dev/noc_debug > /dev/null")
 
     def test2_traffic (self):
-        if (options.no_traffic):
+        if options.no_traffic:
             self.skipTest (f"no traffic")
-        if (options.traffic):
+        if options.traffic:
             ra = int(options.traffic)
-            if (ra < 0 or ra > 10):
+            if ra < 0 or ra > 10:
                 ra = 10
         else:
             ra = 10
@@ -921,9 +917,9 @@ class Test4_Traffic (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test3_traffic (self):
-        if (options.no_traffic):
+        if options.no_traffic:
             self.skipTest (f"no traffic")
-        if (options.traffic):
+        if options.traffic:
             self.skipTest (f"no big traffic")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -935,9 +931,9 @@ class Test4_Traffic (unittest.TestCase):
             os.system (f"cat /mnt/mac/tests/2000 | sudo tee /dev/noc_debug > /dev/null")
 
     def test4_traffic (self):
-        if (options.no_traffic):
+        if options.no_traffic:
             self.skipTest (f"no traffic")
-        if (options.traffic):
+        if options.traffic:
             self.skipTest (f"no big traffic")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
@@ -949,9 +945,9 @@ class Test4_Traffic (unittest.TestCase):
             os.system (f"cat /mnt/mac/tests/3000 | sudo tee /dev/noc_debug > /dev/null")
 
     def test5_traffic (self):
-        if (options.no_traffic):
+        if options.no_traffic:
             self.skipTest (f"no traffic")
-        if (options.traffic):
+        if options.traffic:
             self.skipTest (f"no big traffic")
         if not peerHost:
             self.skipTest (f"--no-remote specified")

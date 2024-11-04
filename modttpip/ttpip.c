@@ -80,8 +80,8 @@ static struct packet_type ttpip_etype_lyr3 __read_mostly = {
     .ignore_outgoing = true,
 };
 static struct packet_type ttpip_etype_tsla __read_mostly = {
-    .dev  = NULL,                      /* set via module-param */
-    .type = htons (TESLA_ETH_P_TTPOE), /* ttpoe frames */
+    .dev  = NULL,                      /* set via module-param 'dev' */
+    .type = htons (TESLA_ETH_P_TTPOE), /* match ttpoe ethernet-encap frames */
     .func = ttpip_frm_recv,
     .ignore_outgoing = true,
 };
