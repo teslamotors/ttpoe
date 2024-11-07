@@ -100,7 +100,10 @@ struct ttp_transport_hdr {
 
 #define TTP_HEADERS_LEN  (sizeof (struct ttp_tsla_shim_hdr) + \
                           sizeof (struct ttp_transport_hdr))
+/* for raw-ethernet mode */
 #define TTP_TTH_HDR_LEN  (sizeof (struct ttp_tsla_type_hdr) + TTP_HEADERS_LEN)
+/* for ipv4-encap mode */
+#define TTP_IP_HDRS_LEN  (sizeof (struct iphdr) + TTP_HEADERS_LEN)
 
 
 enum ttp_extn_types_enum {
@@ -226,6 +229,7 @@ extern u16  ttp_skb_pars (const struct sk_buff *skb, struct ttp_frame_hdr *fh,
 extern int  ttp_skb_enqu (struct sk_buff *skb);
 extern int  ttp_skb_dequ (void);
 
+extern void ttpoe_proc_cleanup (void);
 extern int  __init ttpoe_proc_init (void);
 extern void __exit ttpoe_proc_exit (void);
 #endif

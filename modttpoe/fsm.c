@@ -90,7 +90,7 @@ static bool ttp_fsm_sef__TAG_RESET (struct ttp_fsm_event *ev)
 
     lt->state = TTP_ST__CLOSED;
 
-    TTP_LOG ("`-> Link-DOWN: State %s\n", TTP_STATE_NAME (lt->state));
+    TTP_DBG ("`-> Link-DOWN: State %s\n", TTP_STATE_NAME (lt->state));
     TTP_EVLOG (ev, TTP_LG__TTP_LINK_DOWN, TTP_OP__invalid);
 
     ttp_tag_reset (lt);         /* clear link-tag */
@@ -112,7 +112,7 @@ static bool ttp_fsm_sef__CHECK_NOC (struct ttp_fsm_event *ev)
 
     lt->state = TTP_ST__OPEN;
 
-    TTP_LOG ("`-> Link-UP: State %s\n", TTP_STATE_NAME (lt->state));
+    TTP_DBG ("`-> Link-UP: State %s\n", TTP_STATE_NAME (lt->state));
     TTP_EVLOG (ev, TTP_LG__TTP_LINK_UP, TTP_OP__invalid);
 
     ttp_noc_requ (lt);
@@ -134,11 +134,11 @@ static bool ttp_fsm_sef__OPEN_TIMER (struct ttp_fsm_event *ev)
     lt->state = TTP_ST__OPEN_SENT;
 
     if (timer_pending (&lt->tmr)) {
-        mod_timer_pending (&lt->tmr, jiffies + TTP_TMX_OPEN_SENT_VAL);
+        mod_timer_pending (&lt->tmr, jiffies + msecs_to_jiffies (TTP_TMX_OPEN_SENT));
         TTP_EVLOG (ev, TTP_LG__SH_TIMER_RESTART, TTP_OP__invalid);
     }
     else {
-        lt->tmr.expires = jiffies + TTP_TMX_OPEN_SENT_VAL;
+        lt->tmr.expires = jiffies + msecs_to_jiffies (TTP_TMX_OPEN_SENT);
         add_timer (&lt->tmr);
         TTP_EVLOG (ev, TTP_LG__SH_TIMER_START, TTP_OP__invalid);
     }
@@ -391,11 +391,11 @@ static bool ttp_fsm_rs__CLOSE (struct ttp_fsm_event *ev)
     TTP_EVLOG (ev, TTP_LG__PKT_TX, op);
 
     if (timer_pending (&lt->tmr)) {
-        mod_timer_pending (&lt->tmr, jiffies + TTP_TMX_CLOSE_SENT_VAL);
+        mod_timer_pending (&lt->tmr, jiffies + msecs_to_jiffies (TTP_TMX_CLOSE_SENT));
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_RESTART, TTP_OP__invalid);
     }
     else {
-        lt->tmr.expires = jiffies + TTP_TMX_CLOSE_SENT_VAL;
+        lt->tmr.expires = jiffies + msecs_to_jiffies (TTP_TMX_CLOSE_SENT);
         add_timer (&lt->tmr);
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_START, TTP_OP__invalid);
     }
@@ -466,7 +466,7 @@ static bool ttp_fsm_rs__ACK (struct ttp_fsm_event *ev)
         op = TTP_OP__TTP_NACK_NOLINK;
 
         TTP_EVLOG (ev, TTP_LG__NOC_PAYLOAD_DROP, op);
-        TTP_LOG ("%s: opcode:%s 0x%016llx.%d *** TAG NOT FOUND ***\n",
+        TTP_DBG ("%s: opcode:%s 0x%016llx.%d *** TAG NOT FOUND ***\n",
                  __FUNCTION__, TTP_OPCODE_NAME (op), cpu_to_be64 (ev->kid), ev->idx);
         atomic_inc (&ttp_stats.drp_ct);
         return false;
@@ -602,11 +602,11 @@ static bool ttp_fsm_rs__PAYLOAD (struct ttp_fsm_event *ev)
     }
 
     if (timer_pending (&lt->tmr)) {
-        mod_timer_pending (&lt->tmr, jiffies + TTP_TMX_PAYLOAD_SENT_VAL);
+        mod_timer_pending (&lt->tmr, jiffies + msecs_to_jiffies (TTP_TMX_PAYLOAD_SENT));
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_RESTART, TTP_OP__invalid);
     }
     else {
-        lt->tmr.expires = jiffies + TTP_TMX_PAYLOAD_SENT_VAL;
+        lt->tmr.expires = jiffies + msecs_to_jiffies (TTP_TMX_PAYLOAD_SENT);
         add_timer (&lt->tmr);
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_START, TTP_OP__invalid);
     }
@@ -659,11 +659,11 @@ static bool ttp_fsm_rs__PAYLOAD2 (struct ttp_fsm_event *ev)
     }
 
     if (timer_pending (&lt->tmr)) {
-        mod_timer_pending (&lt->tmr, jiffies + TTP_TMX_PAYLOAD2_SENT_VAL);
+        mod_timer_pending (&lt->tmr, jiffies + msecs_to_jiffies (TTP_TMX_PAYLOAD2_SENT));
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_RESTART, TTP_OP__invalid);
     }
     else {
-        lt->tmr.expires = jiffies + TTP_TMX_PAYLOAD2_SENT_VAL;
+        lt->tmr.expires = jiffies + msecs_to_jiffies (TTP_TMX_PAYLOAD2_SENT);
         add_timer (&lt->tmr);
         TTP_EVLOG (ev, TTP_LG__LN_TIMER_START, TTP_OP__invalid);
     }

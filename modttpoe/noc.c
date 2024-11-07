@@ -166,7 +166,7 @@ int ttpoe_noc_debug_rx (const u8 *data, u16 nl)
 
     /* Is this where we would need to handle host-side congestion ? */
     if ((TTP_NOC_DEBUG_PAGE_SIZE - ttp_noc_debug_len) < nl) {
-        TTP_LOG ("******** Dropped payload: No space in NOC page ********\n");
+        TTP_DBG ("******** Dropped payload: No space in NOC page ********\n");
         atomic_inc (&ttp_stats.drp_ct);
         return -1;
     }
@@ -174,6 +174,7 @@ int ttpoe_noc_debug_rx (const u8 *data, u16 nl)
     memcpy (ttp_noc_debug_page + ttp_noc_debug_len, data, nl);
     ttp_noc_debug_len += nl;
 
+    TTP_DB1 ("%s: ^^^^ Put payload:%u -> debug-noc page\n", __FUNCTION__, nl);
     return 0;
 }
 
@@ -199,7 +200,7 @@ int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, int nl,
         goto force;
     }
     if ((rv = ttpoe_noc_debug_tgt (&kid, tg))) {
-        TTP_LOG ("%s: Error: Invalid target.vc: %*phC.%d gw:%d valid:%d\n",
+        TTP_DBG ("%s: Error: Invalid target.vc: %*phC.%d gw:%d valid:%d\n",
                  __FUNCTION__, ETH_ALEN, tg->mac, tg->vc, tg->gw, tg->ve);
         return rv;
     }
@@ -259,6 +260,7 @@ force:
         ttp_noc_requ (lt);
     }
 
+    TTP_DB1 ("%s: vvvv Got payload:%u <- debug-noc page\n", __FUNCTION__, nl);
     return nl;
 }
 
@@ -282,13 +284,11 @@ static ssize_t ttpoe_noc_debug_write (struct file *filp, const char __user *user
     }
 
     if (ttp_shutdown) {
-        TTP_LOG ("%s: noc debug payload dropped: ttp is shutdown\n", __FUNCTION__);
+        TTP_DBG ("%s: noc debug payload dropped: ttp is shutdown\n", __FUNCTION__);
         return -ENETDOWN;
     }
 
     filp->private_data = &ttp_debug_target;
-
-    TTP_LOG ("%s: vvvv Got %zu bytes\n", __FUNCTION__, nbytes);
 
     if (nbytes > TTP_NOC_DAT_SIZE) {
         nbytes = TTP_NOC_DAT_SIZE;
@@ -299,7 +299,7 @@ static ssize_t ttpoe_noc_debug_write (struct file *filp, const char __user *user
     }
 
     if (!is_valid_ether_addr (ttp_debug_target.mac)) {
-        TTP_LOG ("%s: Error: Invalid target.vc: %*phC.%d\n", __FUNCTION__,
+        TTP_DBG ("%s: Error: Invalid target.vc: %*phC.%d\n", __FUNCTION__,
                  ETH_ALEN, ttp_debug_target.mac, ttp_debug_target.vc);
         return -EADDRNOTAVAIL;
     }
@@ -360,7 +360,6 @@ static ssize_t ttpoe_noc_debug_read (struct file *filp, char *buf,
     if ((rc = copy_to_user (buf, ttp_noc_debug_page + *ppos, kc)) < 0) {
         return -EIO;
     }
-    TTP_LOG ("%s: ^^^^ Put %u bytes\n", __FUNCTION__, kc);
 
     *ppos += kc;
     return kc;

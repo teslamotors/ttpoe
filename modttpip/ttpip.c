@@ -60,6 +60,7 @@
 char *ttp_dev;
 int   ttp_verbose  = -1;
 int   ttp_shutdown =  1; /* 'DOWN' by default - enabled at init after checking */
+int   ttp_drop_pct =  0; /* drop percent = 0% by default */
 
 const u32 Tesla_Mac_Oui  = TESLA_MAC_OUI;
 
@@ -117,7 +118,7 @@ static void ttpip_mcast_mac_create (u8 *mac)
     u32 imac; /* holds lower 3 bytes - similar to shim */
 
     imac = htonl (0xFFFFFF << 8); /* makes each lower 3 byte = 0xff */
-    ttp_mac_from_shim (mac, (u8 *)&imac); /* construct mac with tesla-oui */
+    ttp_prepare_mac_with_oui (mac, Tesla_Mac_Oui, (u8 *)&imac);
     mac[0] |= 0x3; /* convert to multicast link-local mac address */
 }
 
@@ -717,22 +718,6 @@ static struct ttp_mactable *ttp_mactbl_find (const char *mac)
 }
 
 
-static u8 *ttp_prepare_tth (u8 *pkt, int len)
-{
-    struct ttp_tsla_type_hdr *tth = (struct ttp_tsla_type_hdr *)pkt;
-
-    tth->styp = 0;
-    tth->vers = 0;
-    tth->tthl = TTP_PROTO_TTHL;
-    tth->l3gw = true; /* always set gw flag */
-    tth->resv = 0;
-    tth->tot_len = htons (len);
-    memset (tth->pad, 0, sizeof (tth->pad));
-
-    return (u8 *)(tth + 1);
-}
-
-
 static int ttp_mactbl_add (int zn, const char *mac, enum ttp_mac_opcodes oc)
 {
     struct ttp_mactable *mct;
@@ -983,6 +968,26 @@ static const struct kernel_param_ops ttp_param_mactbl_ops = {
 
 module_param_cb (mactbl, &ttp_param_mactbl_ops, &ttp_mactbl_ct, 0444);
 MODULE_PARM_DESC (mactbl, "   read gateway mac-address table");
+
+
+static int ttp_param_drop_pct_set (const char *val, const struct kernel_param *kp)
+{
+    int vv = 0;
+
+    if ((0 != kstrtoint (val, 10, &vv)) || vv < 0 || vv > 10) {
+        return -EINVAL;
+    }
+
+    return param_set_int (val, kp);
+}
+
+static const struct kernel_param_ops ttp_param_drop_pct_ops = {
+    .set = ttp_param_drop_pct_set,
+    .get = param_get_int,
+};
+
+module_param_cb (drop_pct, &ttp_param_drop_pct_ops, &ttp_drop_pct, 0644);
+MODULE_PARM_DESC (drop_pct, " packet drop percent (default=(0), [0:10])");
 
 
 static int ttp_param_shutdown_set (const char *val, const struct kernel_param *kp)
@@ -1447,7 +1452,7 @@ static void ttp_gw_ctl_tmr_cb (struct timer_list *tl)
 
     eth->h_proto = htons (TESLA_ETH_P_TTPOE);
     tth = (struct ttp_tsla_type_hdr *)(eth + 1);
-    tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_tth ((u8 *)tth, 0);
+    tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_tth ((u8 *)tth, 0, true);
 
     memset (tsh, 0, sizeof (*tsh));
     memmove (tsh->src_node, eth->h_source, ETH_ALEN/2);
@@ -1520,6 +1525,10 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     if ((skb->len > TTP_MAX_FRAME_LEN) || (ntohs (skb->protocol) != TESLA_ETH_P_TTPOE)) {
         goto end; /* drop silently */
     }
+    if (ttp_rnd_flip (ttp_drop_pct)) {
+        TTP_LOG ("%s: ->! Rx frame dropped: rate:%d%%\n", __FUNCTION__, ttp_drop_pct);
+        goto end;
+    }
 
     rx_byt = skb->len; /* save rx-len to update stats once drop decisions are complete */
     eth = (struct ethhdr *)skb_mac_header (skb);
@@ -1547,8 +1556,8 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     tsh = (struct ttp_tsla_shim_hdr *)(tth + 1);
 
     /* Decode shim src/dst_node fields */
-    ttp_mac_from_shim (leh.h_dest, tsh->dst_node);
-    ttp_mac_from_shim (leh.h_source, tsh->src_node);
+    ttp_prepare_mac_with_oui (leh.h_dest, Tesla_Mac_Oui, tsh->dst_node);
+    ttp_prepare_mac_with_oui (leh.h_source, Tesla_Mac_Oui, tsh->src_node);
 
     if (ttp_verbose > 1) {
         if ((is_valid_ether_addr (leh.h_source) && is_valid_ether_addr (leh.h_dest) &&
@@ -1700,6 +1709,10 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
     if (skb->len > TTP_MAX_FRAME_LEN) {
         goto end; /* drop silently */
     }
+    if (ttp_rnd_flip (ttp_drop_pct)) {
+        TTP_LOG ("%s: ->! Rx pkt dropped: rate:%d%%\n", __FUNCTION__, ttp_drop_pct);
+        goto end;
+    }
 
     rx_byt = skb->len; /* save rx-len to update stats once drop decisions are complete */
     eth = (struct ethhdr *)skb_mac_header (skb);
@@ -1771,14 +1784,14 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
     }
 
     /* Decode shim src/dst_node fields */
-    ttp_mac_from_shim (leh.h_dest, tsh->dst_node);
-    ttp_mac_from_shim (leh.h_source, tsh->src_node);
+    ttp_prepare_mac_with_oui (leh.h_dest, Tesla_Mac_Oui, tsh->dst_node);
+    ttp_prepare_mac_with_oui (leh.h_source, Tesla_Mac_Oui, tsh->src_node);
 
     /* Prepare TTPoE frame to forward to destination ttp-node */
     skb_push (skb, sizeof (struct ttp_tsla_type_hdr)); /* add tesla-type header */
 
     tth = (struct ttp_tsla_type_hdr *)skb->data;
-    ttp_prepare_tth (skb->data, skb->len);
+    ttp_prepare_tth (skb->data, skb->len, true);
 
     ttp_print_eth_hdr (eth);
     ttp_print_tsla_type_hdr (tth);
@@ -1845,13 +1858,6 @@ static int __init ttpip_init (void)
     int rv;
     struct ttp_intf_cfg *myzcfg;
 
-#if (TTP_TTH_MATCHES_IPH == 1)
-    if (sizeof (struct ttp_tsla_type_hdr) != sizeof (struct iphdr)) {
-        TTP_LOG ("Error: tth size != iph size - unloading\n");
-        rv = -EINVAL;
-        goto error;
-    }
-#endif
     if (!ttp_num_gwips) {
         TTP_LOG ("Error: no gwips specified - unloading\n");
         rv = -ENODEV;

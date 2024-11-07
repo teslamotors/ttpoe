@@ -358,7 +358,7 @@ static void ttp_param_scan_ipv4 (const struct net_device *dev)
         if ((ifa4->ifa_address & mask) == (ttp_ipv4_prefix & mask)) {
             ttp_debug_source.ipa = ifa4->ifa_address;
             node = ifa4->ifa_address & ~mask; /* get host part */
-            ttp_mac_from_shim (mac, (u8 *)&node + 1);
+            ttp_prepare_mac_with_oui (mac, Tesla_Mac_Oui, (u8 *)&node + 1);
             kid = ttp_tag_key_make (mac, 0, false, ttp_ipv4_encap);
             TTP_DBG ("%s: Source-IP:%pI4 mytag:[0x%016llx]\n", __FUNCTION__,
                      &ifa4->ifa_address, cpu_to_be64 (kid));
@@ -426,7 +426,7 @@ static int ttp_param_prefix_set (const char *val, const struct kernel_param *kp)
             TTP_LOG ("Error: Couldn't 'get' dev:%s - unloading\n", ttp_dev);
             return -ENODEV;
         }
-        TTP_LOG ("'get' dev:%s - success mac:%*phC\n", ttp_dev, ETH_ALEN,
+        TTP_DBG ("'get' dev:%s - success mac:%*phC\n", ttp_dev, ETH_ALEN,
                  ttp_etype_dev.dev->dev_addr);
         dev_put (ttp_etype_dev.dev);
         ether_addr_copy (ttp_debug_source.mac, ttp_etype_dev.dev->dev_addr);
@@ -467,7 +467,7 @@ static const struct kernel_param_ops ttp_param_ipv4_sip_ops = {
 };
 
 module_param_cb (ipv4_sip, &ttp_param_ipv4_sip_ops, &ttp_debug_source.ipa, 0444);
-MODULE_PARM_DESC (ipv4_sip, "   ipv4 src-ip: (A.B.C.D)");
+MODULE_PARM_DESC (ipv4_sip, " ipv4 src-ip: (A.B.C.D)");
 
 
 static int ttp_param_ipv4_dip_get (char *buf, const struct kernel_param *kp)
@@ -481,7 +481,7 @@ static const struct kernel_param_ops ttp_param_ipv4_dip_ops = {
 };
 
 module_param_cb (ipv4_dip, &ttp_param_ipv4_dip_ops, &ttp_debug_target.ipa, 0444);
-MODULE_PARM_DESC (ipv4_dip, "   ipv4 dst-ip: (A.B.C.D)");
+MODULE_PARM_DESC (ipv4_dip, " ipv4 dst-ip: (A.B.C.D)");
 
 
 static int ttp_param_verbose_set (const char *val, const struct kernel_param *kp)
@@ -502,6 +502,26 @@ static const struct kernel_param_ops ttp_param_verbose_ops = {
 
 module_param_cb (verbose, &ttp_param_verbose_ops, &ttp_verbose, 0644);
 MODULE_PARM_DESC (verbose, "  kernel log verbosity level (default=(-1), 0, 1, 2, 3)");
+
+
+static int ttp_param_drop_pct_set (const char *val, const struct kernel_param *kp)
+{
+    int vv = 0;
+
+    if ((0 != kstrtoint (val, 10, &vv)) || vv < 0 || vv > 10) {
+        return -EINVAL;
+    }
+
+    return param_set_int (val, kp);
+}
+
+static const struct kernel_param_ops ttp_param_drop_pct_ops = {
+    .set = ttp_param_drop_pct_set,
+    .get = param_get_int,
+};
+
+module_param_cb (drop_pct, &ttp_param_drop_pct_ops, &ttp_drop_pct, 0644);
+MODULE_PARM_DESC (drop_pct, " packet drop percent (default=(0), [0:10])");
 
 
 static int ttp_param_shutdown_set (const char *val, const struct kernel_param *kp)
@@ -586,7 +606,7 @@ MODULE_PARM_DESC (stats, "    ttp counters (read-only)");
 static int ttp_debug_target_force_close (struct ttpoe_host_info *tg)
 {
     if (is_valid_ether_addr (tg->mac)) {
-        TTP_LOG ("noc_debug: Sending TTP_CLOSE to target.vc: %*phC.%d\n",
+        TTP_DBG ("noc_debug: Sending TTP_CLOSE to target.vc: %*phC.%d\n",
                  ETH_ALEN, tg->mac, tg->vc);
         /* best effort, no error checking */
         ttpoe_noc_debug_tx (NULL, NULL, 0, TTP_EV__TXQ__TTP_CLOSE, &ttp_debug_target);
@@ -601,7 +621,7 @@ static int ttp_param_debug_target_set (const char *val, const struct kernel_para
     u32 target;
 
     if (ttp_ipv4_encap && !ttp_ipv4_prefix) {
-        TTP_LOG ("%s: Error: ttp ipv4-encap required to set target\n", __FUNCTION__);
+        TTP_LOG ("%s: Error: ttp ipv4-encap enabled, no ipv4-prefix set\n", __FUNCTION__);
         return -EINVAL;
     }
     if ((rv = kstrtouint (val, 16 /* base16 */, &target))) {
@@ -616,17 +636,9 @@ static int ttp_param_debug_target_set (const char *val, const struct kernel_para
         return 0;
     }
 
-    /* construct target mac address: upper 24b oui */
-    eth_zero_addr (ttp_debug_target.mac);
-    ttp_debug_target.mac[0] = Tesla_Mac_Oui0;
-    ttp_debug_target.mac[1] = Tesla_Mac_Oui1;
-    ttp_debug_target.mac[2] = Tesla_Mac_Oui2;
-
-    /* lower 24b */
-    ttp_debug_target.mac[3] = (target >> 16) & 0xff;
-    ttp_debug_target.mac[4] = (target >>  8) & 0xff;
-    ttp_debug_target.mac[5] = (target >>  0) & 0xff;
-
+    /* construct target mac address */
+    target = htonl (target);
+    ttp_prepare_mac_with_oui (ttp_debug_target.mac, Tesla_Mac_Oui, (u8 *)&target + 1);
     if (!is_valid_ether_addr (ttp_debug_target.mac)) {
         return -EADDRNOTAVAIL;
     }
@@ -634,10 +646,10 @@ static int ttp_param_debug_target_set (const char *val, const struct kernel_para
         memcpy ((u8 *)&ttp_debug_target.ipa + 1, &ttp_debug_target.mac[3], ETH_ALEN/2);
         ttp_debug_target.ipa &= ~inet_make_mask (ttp_ipv4_pfxlen);
         ttp_debug_target.ipa |= ttp_ipv4_prefix;
-        TTP_LOG ("%s: target.ip:%pI4\n", __FUNCTION__, &ttp_debug_target.ipa);
+        TTP_DBG ("%s: target.ip:%pI4\n", __FUNCTION__, &ttp_debug_target.ipa);
     }
     else {
-        TTP_LOG ("%s: target.mac:%*phC\n", __FUNCTION__, ETH_ALEN, ttp_debug_target.mac);
+        TTP_DBG ("%s: target.mac:%*phC\n", __FUNCTION__, ETH_ALEN, ttp_debug_target.mac);
     }
 
     ttp_debug_target.ve = 1;    /* force valid for debug 'target' */

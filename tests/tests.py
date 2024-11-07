@@ -54,6 +54,8 @@ tagSeqi  = "0"
 nhmac    = ""
 ipv4Arg  = 0
 prefix   = ""
+dropPct  = 0
+sleepSec = 0.0
 
 modpath  = "/sys/module/modttpoe/parameters"
 procpath = "/proc/net/modttpoe"
@@ -93,18 +95,33 @@ def setUpModule():
     global nhmac
     global ipv4Arg
     global prefix
+    global dropPct
+    global sleepSec
 
-    if "-vv" in sys.argv[1:] or "--vverbose" in sys.argv[1:]:
+    if "-vvv" in sys.argv[1:] or "--vvverbose" in sys.argv[1:]:
+        verbose = 3
+    elif "-vv" in sys.argv[1:] or "--vverbose" in sys.argv[1:]:
         verbose = 2
-    if "-v" in sys.argv[1:] or "--verbose" in sys.argv[1:]:
+    elif "-v" in sys.argv[1:] or "--verbose" in sys.argv[1:]:
         verbose = 1
 
     selfHost = selfHostname()
 
+    if options.drop_pct:
+        dropPct = int(options.drop_pct)
+    if options.sleep:
+        sleepSec = float(options.sleep)
+    elif options.drop_pct:
+        sleepSec = 2.0
     if verbose:
         print (f"v---------------------------------------v")
         print (f" Start tests: {datetime.now()}")
-        print (f"     Verbose: {verbose}")
+        if verbose >= 2:
+            print (f"     Verbose: {verbose}")
+        if dropPct or verbose >= 2:
+            print (f"Drop Percent: {dropPct}")
+        if sleepSec != 0.0 or verbose >= 2:
+            print (f" Sleep Delay: {sleepSec}")
     if options.ipv4:
         ipv4Arg = 1
         if verbose:
@@ -124,14 +141,14 @@ def setUpModule():
     if verbose:
         if options.vci:
             print (f"    Conn VCI: {connVCI} (override)")
-        elif verbose == 2:
+        elif verbose >= 2:
             print (f"    Conn VCI: 0 (default)")
     if options.self_dev:
         selfDev = options.self_dev
         if verbose:
             print (f"     SelfDev: {selfDev} (override)")
     else:
-        if verbose == 2:
+        if verbose >= 2:
             print (f"     selfDev: {selfDev} (default)")
     if not options.target:
         print (f"Error: Missing --target")
@@ -198,7 +215,7 @@ def setUpModule():
         po = subprocess.run (['file', '/dev/noc_debug'],
                              stdout=subprocess.PIPE).stdout.decode().strip()
         if "character special (446/0)" not in po:
-            os.system (f"ls -al /dev/noc_debug")
+            os.system (f"ls -l /dev/noc_debug")
             print (f"Error: 'self' /dev/noc_debug not 'char' dev (446/0)\n"
                    "HINT: '/dev/noc_debug' may be a plain text file - remove it")
             sys.exit (-1)
@@ -209,7 +226,7 @@ def setUpModule():
             po = subprocess.run (['ssh', peerHost, 'file', '/dev/noc_debug'],
                                  stdout=subprocess.PIPE).stdout.decode().strip()
             if "character special (446/0)" not in po:
-                os.system (f"ssh {peerHost} 'ls -al /dev/noc_debug'")
+                os.system (f"ssh {peerHost} 'ls -l /dev/noc_debug'")
                 print (f"Error: 'peer' /dev/noc_debug not 'char' dev (446/0)\n"
                        "HINT: '/dev/noc_debug' may be a plain text file - remove it")
                 sys.exit (-1)
@@ -240,14 +257,14 @@ def setUpModule():
             peerDev = getDefaultIP4Dev()
         else:
             peerDev = getDefaultEthDev()
-        if verbose == 2:
+        if verbose >= 2:
             print (f"     PeerDev: {peerDev} (default)")
     if verbose:
         print (f"    Peer MAC: {macUpper}:{peerMacL}")
         print (f" Peer Target: {peerTgt}")
         print (f"   Peer Host: {peerHost}")
     if peerHost:
-        rv = os.system (f"ssh {peerHost} 'ifconfig {peerDev} 1>/dev/null'")
+        rv = os.system (f"ssh {peerHost} '/sbin/ifconfig {peerDev} 1>/dev/null'")
         if rv != 0:
             print (f"Error: Peer device '{peerDev}' not found")
             os.remove (selfLock)
@@ -257,7 +274,8 @@ def setUpModule():
         print (f"Skipping local module reload in setup:-")
     else:
         rv = os.system (f"sudo insmod /mnt/mac/modttpoe.ko"
-                        f" verbose={verbose} dev={selfDev} ipv4={ipv4Arg}")
+                        f" verbose={verbose} dev={selfDev}"
+                        f" ipv4={ipv4Arg} drop_pct={dropPct}")
         if rv != 0:
             print (f"Error: 'insmod modttpoe' on 'self' failed")
             os.remove (selfLock)
@@ -300,7 +318,7 @@ def setUpModule():
             pf = open (f"/sys/module/modttpoe/parameters/nhmac", "r")
             nhmac = pf.read().strip()
             pf.close()
-            if verbose == 2:
+            if verbose >= 2:
                 print (f"?GW MAC addr: {nhmac}")
             if nhmac == "00:00:00:00:00:00":
                 time.sleep (1)
@@ -347,14 +365,15 @@ def setUpModule():
     if tagSeqi != 1:
         if verbose:
             print (f"     Tag Seq: {tagSeqi} (override)")
-    elif verbose == 2:
+    elif verbose >= 2:
         print (f"     Tag Seq: {tagSeqi} (default)")
     if options.no_load:
         print (f"Skipping peer module reload in setup:-")
     else:
         if peerHost:
             rv = os.system (f"ssh {peerHost} 'sudo insmod /mnt/mac/modttpoe.ko"
-                            f" verbose={verbose} dev={peerDev} ipv4={ipv4Arg}'")
+                            f" verbose={verbose} dev={peerDev}"
+                            f" ipv4={ipv4Arg} drop_pct={dropPct}'")
             if rv != 0:
                 print (f"Error: 'insmod modttpoe' on 'peer' failed")
                 os.system ("sudo rmmod modttpoe 1>/dev/null")
@@ -376,7 +395,7 @@ def setUpModule():
 
 
 def tearDownModule():
-    if verbose == 2:
+    if verbose == 3:
         print (f"**** Waiting 10 sec before tear-down:-\n"
                f" Hit ^C to stop and examine state before modules are unloaded")
         time.sleep (10)
@@ -414,14 +433,18 @@ class Test0_Seq_IDs (unittest.TestCase):
 
         os.system (f"cat /mnt/mac/tests/greet | sudo tee /dev/noc_debug > /dev/null")
         time.sleep (1.0)
-        x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/greet'")
+        if verbose >= 2:
+            x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/greet'")
+        else:
+            x = os.system (f"ssh {peerHost}"
+                           f" 'diff /dev/noc_debug /mnt/mac/tests/greet > /dev/null'")
         if x != 0:
             self.fail (f"received file did not match sent file 'greet'")
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
         needle = f" {tagSeqi:7}  {(tagSeqi+2):7}  {(tagSeqi+1):7}  "
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if needle not in pfo or peerMacL not in pfo:
@@ -432,7 +455,7 @@ class Test0_Seq_IDs (unittest.TestCase):
         pfo = pf.read()
         pf.close()
         needle = f" {tagSeqi:7}  {(tagSeqi+3):7}  {(tagSeqi+2):7}"
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if needle not in pfo or peerMacL not in pfo:
@@ -440,7 +463,7 @@ class Test0_Seq_IDs (unittest.TestCase):
         pf = open (f"{modpath}/stats", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             for ll in pfo.split ("\n"):
                 if "skb_" in ll:
@@ -467,25 +490,28 @@ class Test0_Seq_IDs (unittest.TestCase):
         os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
         os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet |"
                    f" sudo tee /dev/noc_debug > /dev/null'")
-        time.sleep (0.1)
-        os.system (f"diff /dev/noc_debug /mnt/mac/tests/greet")
+        time.sleep (0.1 + sleepSec)
+        if verbose >= 2:
+            os.system (f"diff /dev/noc_debug /mnt/mac/tests/greet")
+        else:
+            os.system (f"diff /dev/noc_debug /mnt/mac/tests/greet > /dev/null")
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
         needle = f" {(tagSeqi+1):7}  {(tagSeqi+3):7}  {(tagSeqi+2):7}"
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if needle not in pfo or peerMacL not in pfo:
             self.fail (f"did not find proper RX seq_ID (expected rx:2)")
         os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet |"
                    f" sudo tee /dev/noc_debug > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
         needle = f" {(tagSeqi+2):7}  {(tagSeqi+3):7}  {(tagSeqi+2):7}"
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if needle not in pfo or peerMacL not in pfo:
@@ -515,7 +541,7 @@ class Test0_Seq_IDs (unittest.TestCase):
 class Test1_Proc (unittest.TestCase):
 
     def test1_proc_stats (self):
-        if verbose == 2:
+        if verbose >= 2:
             print()
             pf = open (f"{modpath}/stats", "r")
             print (pf.read())
@@ -525,7 +551,7 @@ class Test1_Proc (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test2_ttpoe_tags (self):
-        if verbose == 2:
+        if verbose >= 2:
             print()
             pf = open (f"{procpath}/tags", "r")
             print (pf.read())
@@ -542,10 +568,14 @@ class Test1_Proc (unittest.TestCase):
 
         os.system (f"ssh {peerHost} 'cat /dev/null |"
                    f" sudo tee /dev/noc_debug > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         os.system (f"cat /mnt/mac/tests/500 | sudo tee /dev/noc_debug > /dev/null")
-        time.sleep (0.1)
-        x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/500'")
+        time.sleep (0.1 + sleepSec)
+        if verbose >= 2:
+            x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/500'")
+        else:
+            x = os.system (f"ssh {peerHost}"
+                           f" 'diff /dev/noc_debug /mnt/mac/tests/500 > /dev/null'")
         if x != 0:
             self.fail (f"received file did not match sent file '500'")
 
@@ -558,10 +588,14 @@ class Test1_Proc (unittest.TestCase):
 
         os.system (f"ssh {peerHost} 'cat /dev/null |"
                    f" sudo tee /dev/noc_debug > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         os.system (f"cat /mnt/mac/tests/1000 | sudo tee /dev/noc_debug > /dev/null")
-        time.sleep (0.1)
-        x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/1000'")
+        time.sleep (0.1 + sleepSec)
+        if verbose >= 2:
+            x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/1000'")
+        else:
+            x = os.system (f"ssh {peerHost}"
+                           f" 'diff /dev/noc_debug /mnt/mac/tests/1000 > /dev/null'")
         if x != 0:
             self.fail (f"received file did not match sent file '1000'")
 
@@ -574,10 +608,14 @@ class Test1_Proc (unittest.TestCase):
 
         os.system (f"ssh {peerHost} 'cat /dev/null |"
                    f" sudo tee /dev/noc_debug > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         os.system (f"cat /mnt/mac/tests/2000 | sudo tee /dev/noc_debug > /dev/null")
-        time.sleep (0.1)
-        x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/2000'")
+        time.sleep (0.1 + sleepSec)
+        if verbose >= 2:
+            x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/2000'")
+        else:
+            x = os.system (f"ssh {peerHost}"
+                           f" 'diff /dev/noc_debug /mnt/mac/tests/2000 > /dev/null'")
         if x != 0:
             self.fail (f"received file did not match sent file '2000'")
 
@@ -590,10 +628,14 @@ class Test1_Proc (unittest.TestCase):
 
         os.system (f"ssh {peerHost} 'cat /dev/null |"
                    f" sudo tee /dev/noc_debug > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         os.system (f"cat /mnt/mac/tests/3000 | sudo tee /dev/noc_debug > /dev/null")
-        time.sleep (0.1)
-        x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/3000'")
+        time.sleep (0.1 + sleepSec)
+        if verbose >= 2:
+            x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/3000'")
+        else:
+            x = os.system (f"ssh {peerHost}"
+                           f" 'diff /dev/noc_debug /mnt/mac/tests/3000 > /dev/null'")
         if x != 0:
             self.fail (f"received file did not match sent file '3000'")
 
@@ -606,10 +648,14 @@ class Test1_Proc (unittest.TestCase):
 
         os.system (f"ssh {peerHost} 'cat /dev/null |"
                    f" sudo tee /dev/noc_debug > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         os.system (f"cat /mnt/mac/tests/4000 | sudo tee /dev/noc_debug > /dev/null")
-        time.sleep (1.1)
-        x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/4000'")
+        time.sleep (1.1 + sleepSec)
+        if verbose >= 2:
+            x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/4000'")
+        else:
+            x = os.system (f"ssh {peerHost}"
+                           f" 'diff /dev/noc_debug /mnt/mac/tests/4000 > /dev/null'")
         if x != 0:
             self.fail (f"received file did not match sent file '4000'")
 
@@ -640,11 +686,11 @@ class Test2_Packet (unittest.TestCase):
                    f" -D PAYLOAD=\\\""
                    f"hello-tesla-OPEN"
                    f"\\\" > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "OP" not in pfo or peerMacL not in pfo:
@@ -673,11 +719,11 @@ class Test2_Packet (unittest.TestCase):
                    f" -D PAYLOAD=\\\""
                    f"hello-tesla-OPEN"
                    f"\\\" > /dev/null")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "OP" not in pfo or peerMacL not in pfo:
@@ -718,11 +764,11 @@ class Test2_Packet (unittest.TestCase):
          f"\\ Wikipedia,\\ much\\ of\\ the\\ time\\ you\\ will.\\ However,\\ Wikipedia"
          f"\\ cannot\\ guarantee\\ the\\ validity\\ of\\ the\\ information\\ found\\ here"
          f"\\\" > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "OP" not in pfo or peerMacL not in pfo:
@@ -762,11 +808,11 @@ class Test2_Packet (unittest.TestCase):
          f"\\ Wikipedia,\\ much\\ of\\ the\\ time\\ you\\ will.\\ However,\\ Wikipedia"
          f"\\ cannot\\ guarantee\\ the\\ validity\\ of\\ the\\ information\\ found\\ here"
          f"\\\" > /dev/null")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "OP" not in pfo or peerMacL not in pfo:
@@ -779,7 +825,9 @@ class Test2_Packet (unittest.TestCase):
         if options.no_packet:
             self.skipTest (f"--no-packet specified")
         if options.use_gw:
-            self.skipTest (f"--use_gw specified")
+            self.skipTest (f"--use-gw specified")
+        if options.drop_pct:
+            self.skipTest (f"--drop-pct specified")
         if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
@@ -802,11 +850,11 @@ class Test2_Packet (unittest.TestCase):
                    f" -D PAYLOAD=\\\""
                    f"hello-tesla-CLOSE"
                    f"\\\" > /dev/null'")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "OP" in pfo and peerMacL in pfo:
@@ -819,7 +867,9 @@ class Test2_Packet (unittest.TestCase):
         if options.no_packet:
             self.skipTest (f"--no-packet specified")
         if options.use_gw:
-            self.skipTest (f"--use_gw specified")
+            self.skipTest (f"--use-gw specified")
+        if options.drop_pct:
+            self.skipTest (f"--drop-pct specified")
         if options.no_load:
             self.skipTest (f"requires module reload")
         if not peerHost:
@@ -841,11 +891,11 @@ class Test2_Packet (unittest.TestCase):
                    f" -D PAYLOAD=\\\""
                    f"hello-tesla-CLOSE"
                    f"\\\" > /dev/null")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "OP" in pfo and peerMacL in pfo:
@@ -858,7 +908,7 @@ class Test3_Noc_db (unittest.TestCase):
     def test1_show_tag (self):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
-        if verbose == 2:
+        if verbose >= 2:
             print()
             os.system (f"cat {procpath}/tags")
             print()
@@ -875,7 +925,7 @@ class Test3_Noc_db (unittest.TestCase):
                    f" sudo tee /dev/noc_debug > /dev/null'")
         os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet |"
                    f" sudo tee /dev/noc_debug > /dev/null'")
-        if verbose == 2:
+        if verbose >= 2:
             print()
             os.system (f"cat /dev/noc_debug")
             print()
@@ -966,11 +1016,11 @@ class Test5_Cleanup (unittest.TestCase):
             self.skipTest (f"--no-remote specified")
 
         os.system (f"ssh {peerHost} 'cat {procpath}/tags' > /tmp/peer_tags")
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open ("/tmp/peer_tags", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "OP" in pfo and peerMacL in pfo:
@@ -978,18 +1028,18 @@ class Test5_Cleanup (unittest.TestCase):
 
     #@unittest.skip ("<comment>")
     def test2_cleanup (self):
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         pf = open (f"{modpath}/stats", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "skb_ct: 0" not in pfo:
             self.fail (f"local skb_ct expected 0")
 
     def test3_cleanup (self):
-        time.sleep (0.1)
+        time.sleep (0.1 + sleepSec)
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
@@ -997,7 +1047,7 @@ class Test5_Cleanup (unittest.TestCase):
         pf = open (f"/tmp/peer_stats", "r")
         pfo = pf.read()
         pf.close()
-        if verbose == 2:
+        if verbose >= 2:
             print()
             print (pfo)
         if "skb_ct: 0" not in pfo:
@@ -1013,6 +1063,8 @@ if __name__ == '__main__':
     parser.add_argument ('--ipv4',       action='store_true')  # [--ipv4]
     parser.add_argument ('--prefix',                        )  # [--prefix=<A.B.C.D/L>]
     parser.add_argument ('--target')                           # [--target=<NN>]
+    parser.add_argument ('--drop-pct')                         # [--drop-pct=<%val>]
+    parser.add_argument ('--sleep')                            # [--sleep=<sec>]
     parser.add_argument ('--no-unload',  action='store_true')  # [--no-unload]
     parser.add_argument ('--no-load',    action='store_true')  # [--no-load]
     parser.add_argument ('--no-traffic', action='store_true')  # [--no-traffic]

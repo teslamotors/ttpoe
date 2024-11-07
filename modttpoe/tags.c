@@ -294,7 +294,7 @@ void ttp_fsm_evlog_add (const char *fil, const int lin,
     BUG_ON (qev && qev->tsk && qev->rsk);
 
     if (!mutex_trylock (&ttp_global_root_head.evlog_mutx)) {
-        TTP_LOG ("%s: trylock failed, logev: %d\n", __FUNCTION__, evn);
+        TTP_DBG ("%s: trylock failed, logev: %d\n", __FUNCTION__, evn);
         return;
     }
 

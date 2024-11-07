@@ -317,6 +317,13 @@ static int ttpoe_proc_target_show (struct seq_file *seq, void *v)
 
 static struct proc_dir_entry *ttp_proc_dir;
 
+void ttpoe_proc_cleanup (void)
+{
+    if (ttp_proc_dir) {
+        remove_proc_subtree ("modttpoe", init_net.proc_net);
+    }
+}
+
 int __init ttpoe_proc_init (void)
 {
     if (!(ttp_proc_dir = proc_mkdir ("modttpoe", init_net.proc_net))) {
@@ -362,7 +369,5 @@ out:
 
 void __exit ttpoe_proc_exit (void)
 {
-    if (ttp_proc_dir) {
-        remove_proc_subtree ("modttpoe", init_net.proc_net);
-    }
+    ttpoe_proc_cleanup ();
 }

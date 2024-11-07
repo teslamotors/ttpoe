@@ -61,8 +61,11 @@ extern const u32 Tesla_Mac_Oui; /* 3-bytes in host order: (mac[0]<<16)|(mac[1]<<
 
 #define TTP_MAX_VCID      ((u8)2)     /* vc-id : [0, 1, 2] */
 
+#define TTP_IPHDR_VER_V4     4
+#define TTP_IPHDR_VER_V6     6
+#define TTP_IPHDR_IHL        5
 #define TTP_IPPROTO_TTP    146
-#define TTP_TTH_MATCHES_IPH  1  /* set 0 for TTP w/o L3-gw: as implemented in FZ1 */
+#define TTP_IPHDR_TTL        9  /* arbitrary value - needs to be non-zero at a minimum */
 
 #define TTP_NOTRACE   notrace
 #define TTP_NOINLINE  noinline
@@ -132,6 +135,7 @@ static inline int ttp_dev_uevent (
 #define TTP_NAH2B(n,a,x,y)   ((16 * TTP_XX2VAL ((n) > (x) ? (a)[(x)] : 0)) + \
                               TTP_XX2VAL ((n) > (y) ? (a)[(y)] : 0))
 
+extern int ttp_drop_pct;
 extern int ttp_verbose;
 extern int ttp_shutdown;
 extern char *ttp_dev;
@@ -182,16 +186,8 @@ struct ttp_tsla_type_hdr {
 
 /* Specify number of 32b long-words to pad: Selecting 4 gives 16B, combined with 4B of
  * TTH, gives us 20B in which to place an IPv4 header and replace TTP-Etype with IP */
-#if   (TTP_TTH_MATCHES_IPH == 1)
-#  define TTP_PROTO_PAD      (4)
-#elif (TTP_TTH_MATCHES_IPH == 0)
-#  define TTP_PROTO_PAD      (0)
-#else
-# error "Invalid TTP_TTH_MATCHES_IPH value"
-#endif
-
-#define TTP_PROTO_TTHL          (1 + TTP_PROTO_PAD)
-    u32 pad[TTP_PROTO_PAD];     /* pad to make TTH overlap IPH */
+#define TTP_PROTO_TTHL          5 /* must be = 5 for TTP with ipv4-encap */
+    u32 pad[TTP_PROTO_TTHL -1]; /* pad to make TTH overlap IPH */
 } __attribute__((packed));
 
 
@@ -207,6 +203,14 @@ struct ttp_tsla_type_hdr {
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
  * |                          length [15:0]                        |
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+ *
+ * Mapping of ttp-src-node / ttp-dst-node address in the 24b tesla shim header
+ *  23 22 21 20 19 18 17 16 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ * |      mac OUI [0]      |      mac OUI [1]      |      mac OUI [2]      |
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ * |    mac address [3]    |    mac address [4]    |    mac address [5]    |
+ * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
  */
 struct ttp_tsla_shim_hdr {
     u8  src_node[ETH_ALEN/2];
@@ -217,6 +221,24 @@ struct ttp_tsla_shim_hdr {
 
 #define TTP_LITTLE_XTRA     8   /* needed to avoid hitting skb kernel panic */
 #define TTP_IP_HEADROOM    (ETH_HLEN + sizeof (struct in6_addr) + TTP_LITTLE_XTRA)
+
+
+static inline bool ttp_rnd_flip (int pct)
+{
+    u32 rnd;
+
+    if (pct) {
+        rnd = get_random_u32 ();
+        /* get it down to 10 bits ==> 1000 */
+        rnd = (rnd & 0xffff) ^ (rnd >> 16);
+        rnd = (rnd &  0x3ff) ^ (rnd >> 10);
+        if (rnd < ((pct * (1<<10)) / 100)) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 
 /* len is number of bytes; returns true if !len or mem contains zeros as bytes */
@@ -260,24 +282,19 @@ static inline u8 ttp_tag_index_hash_calc (const u8 *mac)
 
 
 #ifdef __KERNEL__
-/* mapping of ttp-src-node / ttp-dst-node address in the 24b tesla shim header
- *  23 22 21 20 19 18 17 16 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
- * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
- * |    mac address [3]    |    mac address [4]    |    mac address [5]    |
- * +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
- */
-static inline void ttp_mac_from_shim (u8 *mac, const u8 *shim)
+/* This routine combines oui[3] with mac24[3] to prepare a full mac[6] */
+static inline void ttp_prepare_mac_with_oui (u8 *mac, const u32 oui, const u8 *mac24)
 {
-    if (!ttp_mem_is_zero (shim, ETH_ALEN/2)) {
-        *((u32 *)mac) = htonl (Tesla_Mac_Oui << 8);
-        memcpy (mac + 3, shim, ETH_ALEN/2);
+    if (!ttp_mem_is_zero (mac24, ETH_ALEN/2)) {
+        *((u32 *)mac) = htonl (oui << 8);
+        memcpy (mac + 3, mac24, ETH_ALEN/2);
     }
 }
 
 
 static inline void ttp_print_eth_hdr (const struct ethhdr *eth)
 {
-    TTP_DBG ("dmac: %*pM smac:%*pM etype:%04x\n", ETH_ALEN, eth->h_dest,
+    TTP_DBG (" eth: dmac:%*pM smac:%*pM etype:%04x\n", ETH_ALEN, eth->h_dest,
              ETH_ALEN, eth->h_source, ntohs (eth->h_proto));
 }
 
@@ -319,6 +336,21 @@ static inline void ttp_print_ipv6_hdr (struct ipv6hdr *ipv6)
 }
 
 
+/* setup L2.5 - that follows tesla ethertype (used only in in raw-ethernet mode) */
+static inline u8 *ttp_prepare_tth (u8 *pkt, int len, bool gw)
+{
+    struct ttp_tsla_type_hdr *tth = (struct ttp_tsla_type_hdr *)pkt;
+
+    tth->styp = 0;
+    tth->vers = 0;
+    tth->tthl = TTP_PROTO_TTHL;
+    tth->l3gw = gw;
+    tth->resv = 0;
+    tth->tot_len = htons (len);
+    return (u8 *)(tth + 1);
+}
+
+
 /*
  * Fills out ipv4 header in skb with gw-config given src-ip and dst-ip and
  * returns a pointer to the next header
@@ -335,9 +367,9 @@ static inline u8 *ttp_prepare_ipv4 (u8 *pkt, int len, u32 sa4, u32 da4)
     frame_len = max (frame_len, TTP_MIN_FRAME_LEN);
 
     memset (ipv4, 0, sizeof (*ipv4));
-    ipv4->version = 4;
-    ipv4->ihl = 5;
-    ipv4->ttl = 9;
+    ipv4->version = TTP_IPHDR_VER_V4;
+    ipv4->ihl = TTP_IPHDR_IHL;
+    ipv4->ttl = TTP_IPHDR_TTL;
     ipv4->protocol = TTP_IPPROTO_TTP;
     ipv4->saddr = sa4;
     ipv4->daddr = da4;
@@ -365,9 +397,9 @@ static inline u8 *ttp_prepare_ipv6 (u8 *pkt, int len, const struct in6_addr *sa6
     frame_len = max (frame_len, TTP_MIN_FRAME_LEN);
 
     memset (ipv6, 0, sizeof (*ipv6));
-    ipv6->version = 6;
+    ipv6->version = TTP_IPHDR_VER_V6;
     ipv6->nexthdr = TTP_IPPROTO_TTP;
-    ipv6->hop_limit = 9;
+    ipv6->hop_limit = TTP_IPHDR_TTL;
     ipv6->saddr = *sa6;
     ipv6->daddr = *da6;
     ipv6->payload_len = htons (frame_len - ETH_HLEN - sizeof (struct ipv6hdr));
@@ -378,21 +410,10 @@ static inline u8 *ttp_prepare_ipv6 (u8 *pkt, int len, const struct in6_addr *sa6
 
 static inline void ttp_print_tsla_type_hdr (const struct ttp_tsla_type_hdr *tth)
 {
-    if (ttp_mem_is_zero ((u8 *)tth->pad, sizeof (tth->pad))) {
-        TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
-                 "res:0x%02x len:%d pad(%d)%s\n",
-                 tth->styp, tth->vers, tth->tthl, tth->l3gw,
-                 tth->resv, ntohs (tth->tot_len),
-                 (int)sizeof (tth->pad),
-                 (int)sizeof (tth->pad) ? ":00's" : "");
-    } else {
-        TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
-                 "res:0x%02x len:%d\n",
-                 tth->styp, tth->vers, tth->tthl, tth->l3gw,
-                 tth->resv, ntohs (tth->tot_len));
-        TTP_DBG ("      pad(%d): %*phN\n", (int)sizeof (tth->pad),
-                 (int)sizeof (tth->pad), tth->pad);
-    }
+    TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
+             "res:0x%02x len:%d\n",
+             tth->styp, tth->vers, tth->tthl, tth->l3gw,
+             tth->resv, ntohs (tth->tot_len));
 }
 
 

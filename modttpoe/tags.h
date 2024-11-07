@@ -166,11 +166,11 @@ extern struct ttp_link_tag_global ttp_global_root_head;
 #error "Tag table requires number of buckets to be exactly 2"
 #endif
 
-#define TTP_TMX_GWMAC_ADV_VAL     2000
-#define TTP_TMX_OPEN_SENT_VAL     1150
-#define TTP_TMX_PAYLOAD_SENT_VAL  1300
-#define TTP_TMX_CLOSE_SENT_VAL    1300
-#define TTP_TMX_PAYLOAD2_SENT_VAL 1500
+/* timer values are in milli-seconds */
+#define TTP_TMX_OPEN_SENT     250  /* 2x */
+#define TTP_TMX_PAYLOAD_SENT  375  /* 3x */
+#define TTP_TMX_CLOSE_SENT    500  /* 4x */
+#define TTP_TMX_PAYLOAD2_SENT 625  /* 5x */
 
 
 /* Tag value of a single 148b tag entry */
