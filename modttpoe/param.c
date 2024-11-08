@@ -76,13 +76,10 @@
 #include "noc.h"
 #include "print.h"
 
-u8 ttp_nhmac[ETH_ALEN];
 
-
-TTP_UNUSED
 static int ttp_param_dummy_set (const char *val, const struct kernel_param *kp)
 {
-    TTP_LOG ("%s: Error: kernel param not settable\n", __FUNCTION__);
+    TTP_LOG ("%s: Error: kernel param '%s' is not settable\n", __FUNCTION__, kp->name);
     return -EPERM;
 }
 

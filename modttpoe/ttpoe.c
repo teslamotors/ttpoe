@@ -73,8 +73,6 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/ip.h>
-#include <net/route.h>
-#include <net/neighbour.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <net/addrconf.h>
@@ -104,6 +102,8 @@ char *ttp_dev;
 u32   ttp_ipv4_prefix;
 u32   ttp_ipv4_pfxlen;
 int   ttp_ipv4_encap;
+u8    ttp_nhmac[ETH_ALEN] = {0x98, 0xed, 0x5c, 0xff, 0xff, 0xff};
+
 
 static int ttpoe_skb_recv_func (struct sk_buff *, struct net_device *dev,
                                 struct packet_type *pt, struct net_device *odev);
@@ -433,52 +433,6 @@ int ttp_skb_dequ (void)
 }
 
 
-static bool ttp_ipv4_resolve_mac (u32 ip4)
-{
-    bool rv = false;
-    struct flowi4 fl4;
-    struct rtable *rt4 = NULL;
-    struct in_addr nh4;
-    struct neighbour *neigh = NULL;
-
-    memset (&fl4, 0, sizeof fl4);
-    fl4.daddr = ip4;
-    if (IS_ERR (rt4 = ip_route_output_key (&init_net, &fl4))) {
-        TTP_DBG ("%s: Error: route lookup failed for %pI4\n", __FUNCTION__, &ip4);
-        rt4 = NULL;
-        goto end;
-    }
-    if ((rt4->dst.dev->flags & IFF_LOOPBACK) || (!(rt4->dst.dev->flags & IFF_UP))) {
-        TTP_DBG ("%s: Error: dev lookup failed: %s is %s\n", __FUNCTION__,
-                 rt4->dst.dev->name,
-                 rt4->dst.dev->flags & IFF_LOOPBACK ? "LOOPBACK" : "!UP");
-        goto end;
-    }
-    nh4.s_addr = rt4->rt_gw4 ? rt4->rt_gw4 : ip4;
-    if (!(neigh = dst_neigh_lookup (&rt4->dst, &nh4))) {
-        TTP_DBG ("%s: Error: neighbor %pI4->%pI4 lookup\n", __FUNCTION__, &ip4, &nh4);
-        goto end;
-    }
-    if (!is_valid_ether_addr (neigh->ha)) {
-        TTP_DBG ("`-> Failed: %pI4->%pI4->MAC (not resolved): do ARP\n", &ip4, &nh4);
-        neigh_resolve_output (neigh, NULL);
-        goto end;
-    }
-    TTP_DBG ("`-> Resolved: %pI4->%pI4->%*phC\n", &ip4, &nh4, ETH_ALEN, neigh->ha);
-    ether_addr_copy (ttp_nhmac, neigh->ha);
-    rv = true;
-
-end:
-    if (rt4) {
-        dst_release (&rt4->dst);
-    }
-    if (neigh) {
-        neigh_release (neigh);
-    }
-    return rv;;
-}
-
-
 /* sets up ipv4 encap info, returns true on success; false on failure - no drops */
 static bool ttp_ipv4_encap_setup (struct sk_buff *skb)
 {
@@ -493,6 +447,11 @@ static bool ttp_ipv4_encap_setup (struct sk_buff *skb)
         TTP_DBG ("%s: <<- Tx frame dropped: ipv4 'src-ip' not set\n", __FUNCTION__);
         goto end;
     }
+    if (!is_valid_ether_addr (ttp_nhmac)) {
+        TTP_DBG ("%s: <<- Tx frame dropped: ipv4 'nh-mac' unknown\n", __FUNCTION__);
+        goto end;
+    }
+
     sip = ttp_debug_source.ipa;
     skb->protocol = htons (ETH_P_IP);
     ttp_skb_pars (skb, &frh, NULL);
@@ -506,15 +465,6 @@ static bool ttp_ipv4_encap_setup (struct sk_buff *skb)
     if (ttp_prepare_ipv4 ((u8 *)frh.ip4, ntohs (frh.tsh->length), sip, dip)) {
         ether_addr_copy (frh.eth->h_dest, ttp_nhmac);
         frh.eth->h_proto = skb->protocol;
-
-        if (!is_valid_ether_addr (ttp_nhmac)) {
-            if (!ttp_ipv4_resolve_mac (dip)) {
-                return false;
-            }
-            ether_addr_copy (frh.eth->h_dest, ttp_nhmac);
-            TTP_DB1 ("%s: resolved ip:%pI4 -> %*phC\n", __FUNCTION__, &dip,
-                     ETH_ALEN, ttp_nhmac);
-        }
         TTP_DB1 ("%s: skb-len:%d\n", __FUNCTION__, skb->len);
         return true;
     }

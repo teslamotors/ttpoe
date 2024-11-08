@@ -101,7 +101,7 @@ def gen_unique_random_runs (lists):
 def setup_test():
     if not gen_unique_random_runs (zons):
         if not options.quiet:
-            print (f" {red}Failed to generate {int(totn/2)} tests:"
+            print (f" {yellow}Failed to generate {int(totn/2)} tests:"
                    f" try again!{clear}")
         return False
     else:

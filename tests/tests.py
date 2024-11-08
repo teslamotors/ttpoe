@@ -53,12 +53,19 @@ connVCI  = "0"
 tagSeqi  = "0"
 nhmac    = ""
 ipv4Arg  = 0
-prefix   = ""
+selfPfix = ""
+peerPfix = ""
 dropPct  = 0
 sleepSec = 0.0
 
 modpath  = "/sys/module/modttpoe/parameters"
 procpath = "/proc/net/modttpoe"
+
+ttpZones = [[0x1,  0x2,  0x3,  0x10],
+            [0x4,  0x5,  0x6,  0x11],
+            [0x7,  0x8,  0x9],
+            [0xa,  0xb,  0xc],
+            [0x21, 0x22, 0x23, 0x24]]
 
 def getDefaultEthDev():
     return "vleth"
@@ -71,9 +78,18 @@ def selfHostname():
                            stdout=subprocess.PIPE).stdout.decode().strip()
 
 def peerHostname (mac):
+    if options.use_gw:
+        str = selfHostname().split('-')
+        selfhn = int(str[-1], 16)
+        peerhn = int(options.target, 16)
+        for zon in ttpZones:
+            if selfhn in zon and peerhn in zon:
+                print (f"Error: Unsupported in 'use-gw': target-node:'{options.target}'"
+                       f" local-node:'{selfhn:02x}' in same zone:'{1 + ttpZones.index(zon)}'")
+                sys.exit (-1)
     if mac[0] != '0' or mac[1] != '0' or mac[2] != ':' or \
        mac[3] != '0' or mac[4] != '0' or mac[5] != ':':
-        print (f"Warning: Cannot resolve target={options.target} to hostname")
+        print (f"Warning: Cannot resolve target={peerhn} to hostname")
         return "node-unknown"
     else:
         return f"node-{mac[-2:]}"
@@ -94,7 +110,8 @@ def setUpModule():
     global tagSeqi
     global nhmac
     global ipv4Arg
-    global prefix
+    global selfPfix
+    global peerPfix
     global dropPct
     global sleepSec
 
@@ -107,6 +124,37 @@ def setUpModule():
 
     selfHost = selfHostname()
 
+    # command line options checking
+    if not options.target:
+        print (f"Error: Missing --target")
+        sys.exit (-1)
+    if options.ipv4 and options.use_gw:
+        print (f"Error: Cannot combine option '--use-gw' with '--ipv4' option")
+        sys.exit (-1)
+    if not options.ipv4 and (options.prefix or options.self_prefix):
+        print (f"Error: Require '--ipv4' option to specify '--prefix' option")
+        sys.exit (-1)
+    if options.prefix and (options.self_prefix or options.peer_prefix):
+        print (f"Error: Cannot specify '--self/peer-prefix' with '--prefix' option")
+        sys.exit (-1)
+    if not options.ipv4 and (options.self_nhmac or options.peer_nhmac):
+        print (f"Error: Require '--ipv4' option to specify '--nhmac'")
+        sys.exit (-1)
+    if (options.self_prefix and not options.peer_prefix) or \
+       (options.peer_prefix and not options.self_prefix):
+        print (f"Error: Require both '--self/peer-prefix' options")
+        sys.exit (-1)
+    if (options.self_nhmac and not options.peer_nhmac) or \
+       (options.peer_nhmac and not options.self_nhmac):
+        print (f"Error: Require both '--self/peer-nhmac' options")
+        sys.exit (-1)
+    if options.vci:
+        connVCI = options.vci
+    if connVCI != "0" and connVCI != "1" and connVCI != "2":
+        print (f"Error: Invalid vci {connVCI}")
+        sys.exit (-1)
+
+    # command line options handling
     if options.drop_pct:
         dropPct = int(options.drop_pct)
     if options.sleep:
@@ -127,9 +175,14 @@ def setUpModule():
         if verbose:
             print (f"   TTP Encap: ipv4 (etype: 0x0800)")
         if options.prefix:
-            prefix = options.prefix
+            selfPfix = options.prefix
+            peerPfix = options.prefix
+        elif options.self_prefix: # peer_prefix required (checked earlier)
+            selfPfix = options.self_prefix
+            peerPfix = options.peer_prefix
         else:
-            prefix = "10.0.0.0/8"
+            selfPfix = "10.0.0.0/8"
+            peerPfix = "10.0.0.0/8"
         if not options.self_dev:
             selfDev = getDefaultIP4Dev()
     else:
@@ -150,18 +203,8 @@ def setUpModule():
     else:
         if verbose >= 2:
             print (f"     selfDev: {selfDev} (default)")
-    if not options.target:
-        print (f"Error: Missing --target")
-        sys.exit (-1)
-    if options.ipv4 and options.use_gw:
-        print (f"Error: Cannot combine option '--use-gw' with '--ipv4' option")
-        sys.exit (-1)
-    if options.vci:
-        connVCI = options.vci
-    if connVCI != "0" and connVCI != "1" and connVCI != "2":
-        print (f"Error: Invalid vci {connVCI}")
-        sys.exit (-1)
 
+    # get src-mac from ip-link command
     cmd = f"ip -j link show dev {selfDev}"
     out = subprocess.run (str.split (cmd), stdout=subprocess.PIPE)
     if out.returncode:
@@ -171,10 +214,20 @@ def setUpModule():
     if verbose:
         print (f"    Self MAC: {selfMac}")
     jstr = selfMac.split(':')
-    if options.ipv4:
-        selfTgt = f"0000{jstr[-1]}"
+    selfTgt = f"{jstr[-3]}{jstr[-2]}{jstr[-1]}"
+
+    if options.ipv4: # get src-ip from ip-addr command
+        cmd = f"ip -j -4 addr show dev {selfDev}"
+        out = subprocess.run (str.split (cmd), stdout=subprocess.PIPE)
+        if out.returncode:
+            print (f"Error: {cmd} failed")
+            sys.exit (-1)
+        ipa = json.loads (str(out.stdout, encoding='utf-8'))[0]["addr_info"][0]["local"]
+        if verbose:
+            print (f"     Self IP: {ipa} ['ip -4 addr': ipv4_sip]")
+        jstr = ipa.split('.')
+        selfTgt = f"{int(jstr[-1]):06x}"
     else: # check Tesla OUI only for ttpoe/ethernet mode (+gw mode): Skip for ipv4 encap
-        selfTgt = f"{jstr[-3]}{jstr[-2]}{jstr[-1]}"
         if jstr[-6] != "98" and jstr[-5] != "ed" and jstr[-4] != "5c":
             print (f"Error: '{selfDev}' is not a TTP device: {selfMac}")
             sys.exit (-1)
@@ -230,6 +283,10 @@ def setUpModule():
                 print (f"Error: 'peer' /dev/noc_debug not 'char' dev (446/0)\n"
                        "HINT: '/dev/noc_debug' may be a plain text file - remove it")
                 sys.exit (-1)
+        rv = os.system (f"ssh {peerHost} '/sbin/ifconfig {peerDev} 1>/dev/null'")
+        if rv != 0:
+            print (f"Error: Peer device '{peerDev}' not found")
+            sys.exit (-1)
 
     selfLock = f"/mnt/mac/.locks/ttp-host-lock-{selfHost}"
     try:
@@ -245,6 +302,8 @@ def setUpModule():
             print (f"Error: {peerHost} already locked ({peerLock} exists)")
             os.remove (selfLock)
             sys.exit (-1)
+
+    # all checks done, proceeding with tests
     if verbose:
         print (f" Self Target: {selfTgt}")
         print (f"   Self Host: {selfHost}")
@@ -263,19 +322,22 @@ def setUpModule():
         print (f"    Peer MAC: {macUpper}:{peerMacL}")
         print (f" Peer Target: {peerTgt}")
         print (f"   Peer Host: {peerHost}")
-    if peerHost:
-        rv = os.system (f"ssh {peerHost} '/sbin/ifconfig {peerDev} 1>/dev/null'")
-        if rv != 0:
-            print (f"Error: Peer device '{peerDev}' not found")
-            os.remove (selfLock)
-            os.remove (peerLock)
-            sys.exit (-1)
     if options.no_load:
         print (f"Skipping local module reload in setup:-")
     else:
-        rv = os.system (f"sudo insmod /mnt/mac/modttpoe.ko"
-                        f" verbose={verbose} dev={selfDev}"
-                        f" ipv4={ipv4Arg} drop_pct={dropPct}")
+        if options.ipv4:
+            if options.self_nhmac:
+                rv = os.system (f"sudo insmod /mnt/mac/modttpoe.ko"
+                                f" verbose={verbose} dev={selfDev} drop_pct={dropPct}"
+                                f" ipv4={ipv4Arg} prefix={selfPfix}"
+                                f" nhmac={options.self_nhmac}")
+            else:
+                rv = os.system (f"sudo insmod /mnt/mac/modttpoe.ko"
+                                f" verbose={verbose} dev={selfDev} drop_pct={dropPct}"
+                                f" ipv4={ipv4Arg} prefix={selfPfix}")
+        else:
+            rv = os.system (f"sudo insmod /mnt/mac/modttpoe.ko"
+                            f" verbose={verbose} dev={selfDev} drop_pct={dropPct}")
         if rv != 0:
             print (f"Error: 'insmod modttpoe' on 'self' failed")
             os.remove (selfLock)
@@ -283,8 +345,6 @@ def setUpModule():
             sys.exit (-1)
         if verbose:
             print (f" Use Gateway: {options.use_gw}")
-        if options.ipv4:
-            os.system (f"echo {prefix} | sudo tee {modpath}/prefix 1>/dev/null")
         if verbose and options.ipv4:
             pf = open (f"/sys/module/modttpoe/parameters/prefix", "r")
             pfo = pf.read().strip()
@@ -302,16 +362,18 @@ def setUpModule():
                 print (f"Error: Set target on 'self' failed")
                 tearDownModule()
                 sys.exit (-1)
-        if verbose and options.ipv4:
+        if options.ipv4:
             pf = open (f"/sys/module/modttpoe/parameters/ipv4_sip", "r")
             pfo = pf.read().strip()
             pf.close()
-            print (f"     Self IP: {pfo} [param: ipv4_sip]")
-        if verbose and options.ipv4:
+            if verbose:
+                print (f"     Self IP: {pfo} [param: ipv4_sip]")
+        if options.ipv4:
             pf = open (f"/sys/module/modttpoe/parameters/ipv4_dip", "r")
             pfo = pf.read().strip()
             pf.close()
-            print (f"     Peer IP: {pfo} [param: ipv4_dip]")
+            if verbose:
+                print (f"     Peer IP: {pfo} [param: ipv4_dip]")
 
         lct = 10
         while (options.use_gw or options.ipv4) and lct:
@@ -361,7 +423,6 @@ def setUpModule():
 
     tagSeqi = int(subprocess.run (["cat", f"{modpath}/tag_seq"],
                                   stdout=subprocess.PIPE).stdout.decode().strip())
-
     if tagSeqi != 1:
         if verbose:
             print (f"     Tag Seq: {tagSeqi} (override)")
@@ -371,22 +432,26 @@ def setUpModule():
         print (f"Skipping peer module reload in setup:-")
     else:
         if peerHost:
-            rv = os.system (f"ssh {peerHost} 'sudo insmod /mnt/mac/modttpoe.ko"
-                            f" verbose={verbose} dev={peerDev}"
-                            f" ipv4={ipv4Arg} drop_pct={dropPct}'")
+            if options.ipv4:
+                if options.peer_nhmac:
+                    rv = os.system (f"ssh {peerHost} 'sudo insmod /mnt/mac/modttpoe.ko"
+                                    f" verbose={verbose} dev={peerDev} drop_pct={dropPct}"
+                                    f" ipv4={ipv4Arg} prefix={peerPfix}"
+                                    f" nhmac={options.peer_nhmac}'")
+                else:
+                    rv = os.system (f"ssh {peerHost} 'sudo insmod /mnt/mac/modttpoe.ko"
+                                    f" verbose={verbose} dev={peerDev} drop_pct={dropPct}"
+                                    f" ipv4={ipv4Arg} prefix={peerPfix}'")
+            else:
+                rv = os.system (f"ssh {peerHost} 'sudo insmod /mnt/mac/modttpoe.ko"
+                                f" verbose={verbose} dev={peerDev} drop_pct={dropPct}'")
             if rv != 0:
                 print (f"Error: 'insmod modttpoe' on 'peer' failed")
                 os.system ("sudo rmmod modttpoe 1>/dev/null")
                 os.remove (selfLock)
                 os.remove (peerLock)
                 sys.exit (-1)
-        if options.use_gw:
-            time.sleep (2) # to allow for gw-mac resolve on peer and remote-mac-adv
-        else:
             time.sleep (0.5) # to allow peer module to settle down
-        if options.ipv4:
-            os.system (f"ssh {peerHost} 'echo {prefix} |"
-                       f" sudo tee {modpath}/prefix 1>/dev/null'")
     if 0: # exit early control (change 0 --> 1 to enable)
         if verbose:
             print (f"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
@@ -1061,7 +1126,11 @@ if __name__ == '__main__':
     parser.add_argument ('--vci')                              # [--vci=<vc>]
     parser.add_argument ('--use-gw',     action='store_true')  # [--use-gw]
     parser.add_argument ('--ipv4',       action='store_true')  # [--ipv4]
-    parser.add_argument ('--prefix',                        )  # [--prefix=<A.B.C.D/L>]
+    parser.add_argument ('--prefix')                           # [--prefix=<A.B.C.D/L>]
+    parser.add_argument ('--self-prefix')                      # [--prefix=<A.B.C.D/L>]
+    parser.add_argument ('--peer-prefix')                      # [--prefix=<A.B.C.D/L>]
+    parser.add_argument ('--self-nhmac')                       # [--nhmac=<a:b:c:d:e:f>]
+    parser.add_argument ('--peer-nhmac')                       # [--nhmac=<a:b:c:d:e:f>]
     parser.add_argument ('--target')                           # [--target=<NN>]
     parser.add_argument ('--drop-pct')                         # [--drop-pct=<%val>]
     parser.add_argument ('--sleep')                            # [--sleep=<sec>]
