@@ -1294,7 +1294,7 @@ static void ttp_gw_ctl_send (const char *mac, enum ttp_mac_opcodes oc)
             skb->protocol = eth->h_proto = htons (ETH_P_IP);
             tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_ipv4 (pkt, pkt_len,
                                                                 zcfg->sa4.s_addr,
-                                                                zcfg->da4.s_addr);
+                                                                zcfg->da4.s_addr, true);
             frame_len = ETH_HLEN + sizeof (struct iphdr) + pkt_len;
         }
         else if (zcfg->ver == 6) {
@@ -1548,8 +1548,8 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
         TTP_LOG ("%s: Drop frame: Incorrect TTHL: (%d)\n", __FUNCTION__, tth->tthl);
         goto end;
     }
-    if (!tth->l3gw) {
-        TTP_LOG ("%s: Drop frame: Improper ingress gw frame: 'l3gw' flag not set\n",
+    if (!tth->gway) {
+        TTP_LOG ("%s: Drop frame: Improper ingress gw frame: 'gw' flag not set in tth\n",
                  __FUNCTION__);
         goto end;
     }
@@ -1637,7 +1637,7 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
         skb->protocol = htons (ETH_P_IP);
         tsh = (struct ttp_tsla_shim_hdr *)ttp_prepare_ipv4 (skb->data, pkt_len,
                                                             zcfg->sa4.s_addr,
-                                                            zcfg->da4.s_addr);
+                                                            zcfg->da4.s_addr, true);
         frame_len = ETH_HLEN + sizeof (struct iphdr) + pkt_len;
     }
     else if (zcfg->ver == 6) {
@@ -1726,7 +1726,8 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
     else if (eth->h_proto == htons (ETH_P_IPV6)) {
         ver = 6;
         ipv6 = (struct ipv6hdr *)skb_network_header (skb);
-        if (TTP_IPPROTO_TTP != ipv6->nexthdr|| ipv6_addr_cmp (&ipv6->daddr, &myzcfg->da6)) {
+        if (TTP_IPPROTO_TTP != ipv6->nexthdr || ipv6_addr_cmp (&ipv6->daddr,
+                                                               &myzcfg->da6)) {
             goto end; /* drop silently */
         }
     }

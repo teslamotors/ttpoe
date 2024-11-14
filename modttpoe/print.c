@@ -321,7 +321,7 @@ TTP_NOTRACE void ttp_print_evt_val (struct seq_file *seq, const struct ttp_fsm_e
                 lt->vci,
                 TTP_EVENTS_INDX_OF (ev),
                 TTP_EVENT_NAME (ev->evt),
-                lt->gw3 | (lt->tp4 << 1),
+                lt->gwf | (lt->tip << 1),
                 ev->psi.rxi_seq,
                 ev->psi.txi_seq,
                 lt->retire_id,
@@ -350,7 +350,7 @@ TTP_NOTRACE void ttp_print_tag_val (struct seq_file *seq, const struct ttp_link_
                 lt->txt,
                 lt->try,
                 lt->mac[0], lt->mac[1], lt->mac[2],
-                lt->gw3 | (lt->tp4 << 1),
+                lt->gwf | (lt->tip << 1),
                 lt->rx_seq_id,
                 lt->tx_seq_id,
                 lt->retire_id,
@@ -406,11 +406,11 @@ void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_direction dir,
         break;
     case ETH_P_IP:
         ttp_print_ipv4_hdr (frh.ip4);
-        ttp_print_shim_hdr (frh.tsh);
+        ttp_print_udp_hdr (frh.udp);
         break;
     case ETH_P_IPV6:
         ttp_print_ipv6_hdr (frh.ip6);
-        ttp_print_shim_hdr (frh.tsh);
+        ttp_print_udp_hdr (frh.udp);
         break;
     default:
         return;

@@ -195,7 +195,7 @@ int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, int nl,
         TTP_DB2 ("%s: Control pkt target.vc: %*phC.%d gw:%d valid:%d len:%d\n",
                  __FUNCTION__, ETH_ALEN, tg->mac, tg->vc, tg->gw, tg->ve, nl);
         clt._rkid = kid;
-        clt.gw3 = 1;
+        clt.gwf = 1;
         kid = clt._rkid;
         goto force;
     }

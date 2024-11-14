@@ -106,22 +106,22 @@ static u8 ttp_tag_index_vci_get (u64 kid)
 
 
 TTP_NOTRACE
-static u8 ttp_tag_index_gw3_get (u64 kid)
+static u8 ttp_tag_index_gwf_get (u64 kid)
 {
     struct ttp_link_tag lt;
 
     lt._rkid = kid;
-    return lt.gw3;
+    return lt.gwf;
 }
 
 
 TTP_NOTRACE
-static u8 ttp_tag_index_tp4_get (u64 kid)
+static u8 ttp_tag_index_tip_get (u64 kid)
 {
     struct ttp_link_tag lt;
 
     lt._rkid = kid;
-    return lt.tp4;
+    return lt.tip;
 }
 
 
@@ -130,7 +130,7 @@ static u8 ttp_tag_index_tp4_get (u64 kid)
  * ttp end-point. The u8 hash-value is also stored. The 256-entry 2-way hash-table is a
  * cache for the fully-associative sw-link-tag table. The tag is 'invalid' at init.
  */
-u64 ttp_tag_key_make (const u8 *mac, u8 vc, bool gw, bool t4)
+u64 ttp_tag_key_make (const u8 *mac, u8 vc, bool gw, bool t3)
 {
     struct ttp_link_tag lt;
 
@@ -143,8 +143,8 @@ u64 ttp_tag_key_make (const u8 *mac, u8 vc, bool gw, bool t4)
     lt.hvl = ttp_tag_index_hash_calc (mac);
 
     lt.vci = vc;
-    lt.gw3 = gw;
-    lt.tp4 = t4;
+    lt.gwf = gw;
+    lt.tip = t3;
 
     lt.mac[0] = mac[3];
     lt.mac[1] = mac[4];
@@ -212,7 +212,7 @@ void ttp_tag_reset (struct ttp_link_tag *lt)
 /* add 'tag' to table: return 0 (hash val in kid); 1 if both bkts are full*/
 int ttp_tag_add (u64 kid)
 {
-    u8  vc, gw, hv, t4;
+    u8  vc, gw, hv, t3;
     int bk;
     struct ttp_link_tag *lt;
 
@@ -222,8 +222,8 @@ int ttp_tag_add (u64 kid)
 
     hv = ttp_tag_index_hash_get (kid);
     vc = ttp_tag_index_vci_get (kid);
-    gw = ttp_tag_index_gw3_get (kid);
-    t4 = ttp_tag_index_tp4_get (kid);
+    gw = ttp_tag_index_gwf_get (kid);
+    t3 = ttp_tag_index_tip_get (kid);
 
     if (vc == 0) {
         lt = ttp_link_tag_tbl_0[hv];
@@ -248,8 +248,8 @@ int ttp_tag_add (u64 kid)
             ttp_rbtree_tag_add (lt);
 
             lt->bkt = bk;
-            lt->gw3 = gw;
-            lt->tp4 = t4;
+            lt->gwf = gw;
+            lt->tip = t3;
             lt->hvl = hv;
 
             lt->retire_id = ttp_tag_seq_init_val;
@@ -707,7 +707,7 @@ static int ttp_evt_dequ (void)
         if (ttp_verbose_for_ctrl (ev->psi.noc_len)) {
             TTP_DB1 ("##`-> FSM Event-Handle: %s\n", TTP_EVENT_NAME (ev->evt));
             TTP_DB2 ("  `-> lt-rx:%d lt-tx:%d gw:%d tp:%d\n",
-                     lt->rx_seq_id, lt->tx_seq_id, lt->gw3, lt->tp4);
+                     lt->rx_seq_id, lt->tx_seq_id, lt->gwf, lt->tip);
         }
     }
     dqfnp = ttp_fsm_event_handle_fn[ev->evt];

@@ -127,7 +127,7 @@ u8 *ttp_skb_aloc (struct sk_buff **skbp, int nl)
         hdrs_len = TTP_IP_HDRS_LEN;
     }
     else {
-        hdrs_len = TTP_TTH_HDR_LEN;
+        hdrs_len = TTP_OE_HDRS_LEN;
     }
     frame_len = ETH_HLEN + hdrs_len + nl;
 
@@ -240,13 +240,14 @@ static void ttp_setup_ethhdr (struct ethhdr *eth, const u8 *dmac_low, const u8 *
 static void ttpoe_fill_hdr_offsets (const struct sk_buff *skb, struct ttp_pkt_info *pi)
 {
     if (skb->protocol == htons (TESLA_ETH_P_TTPOE)) {
-        pi->tsh_off = sizeof (struct ttp_tsla_type_hdr);
+        pi->tl4_off = sizeof (struct ttp_tsla_type_hdr);
+        pi->ttp_off = sizeof (struct ttp_tsla_shim_hdr) + pi->tl4_off;
     }
     else if (skb->protocol == htons (ETH_P_IP)) {
-        pi->tsh_off = sizeof (struct iphdr);
+        pi->tl4_off = sizeof (struct iphdr);
+        pi->ttp_off = sizeof (struct udphdr) + pi->tl4_off;
     }
 
-    pi->ttp_off = sizeof (struct ttp_tsla_shim_hdr) + pi->tsh_off;
     pi->noc_off = sizeof (struct ttp_transport_hdr) + pi->ttp_off;
     pi->dat_off = sizeof (struct ttp_ttpoe_noc_hdr) + pi->noc_off;
 }
@@ -272,9 +273,17 @@ u16 ttp_skb_pars (const struct sk_buff *skb, struct ttp_frame_hdr *fh,
 
     if (skb->protocol == htons (TESLA_ETH_P_TTPOE)) {
         fh->tth = (struct ttp_tsla_type_hdr *)(pkp + ETH_HLEN);
+        fh->tsh = (struct ttp_tsla_shim_hdr *)(pkp + ETH_HLEN + pi->tl4_off);
+        if (ntohs (fh->tsh->length) >= TTP_OE_ENCP_LEN) {
+            pi->noc_len = ntohs (fh->tsh->length) - TTP_OE_ENCP_LEN;
+        }
     }
     else if (skb->protocol == htons (ETH_P_IP)) {
-        fh->ip4 = (struct iphdr *)(pkp + ETH_HLEN);
+        fh->ip4 = (struct iphdr  *)(pkp + ETH_HLEN);
+        fh->udp = (struct udphdr *)(pkp + ETH_HLEN + pi->tl4_off);
+        if (ntohs (fh->udp->len) >= TTP_IP_ENCP_LEN) {
+            pi->noc_len = ntohs (fh->udp->len) - TTP_IP_ENCP_LEN;
+        }
     }
     else {
         TTP_VBG ("%s: len:%d dev:%s etype:0x%04x\n", __FUNCTION__,
@@ -282,16 +291,12 @@ u16 ttp_skb_pars (const struct sk_buff *skb, struct ttp_frame_hdr *fh,
         return 0; /* unsupported Etype */
     }
 
-    fh->tsh = (struct ttp_tsla_shim_hdr *)(pkp + ETH_HLEN + pi->tsh_off);
     fh->ttp = (struct ttp_transport_hdr *)(pkp + ETH_HLEN + pi->ttp_off);
     fh->noc = (struct ttp_ttpoe_noc_hdr *)(pkp + ETH_HLEN + pi->noc_off);
     fh->dat = (struct ttp_ttpoe_noc_dat *)(pkp + ETH_HLEN + pi->dat_off);
 
     pi->rxi_seq = ntohl (fh->ttp->conn_rx_seq);
     pi->txi_seq = ntohl (fh->ttp->conn_tx_seq);
-    if (ntohs (fh->tsh->length) >= TTP_HEADERS_LEN) {
-        pi->noc_len = ntohs (fh->tsh->length) - TTP_HEADERS_LEN;
-    }
 
     return ntohs (skb->protocol);
 }
@@ -320,13 +325,13 @@ static int ttpoe_parse_check (struct sk_buff *skb)
             TTP_DB1 ("%s: Incorrect IP-Hdr-len:%d\n", __FUNCTION__, frh.ip4->ihl);
             return -1;
         }
-        if (frh.ip4->protocol != TTP_IPPROTO_TTP) {
+        if (frh.ip4->protocol != IPPROTO_UDP) {
             return -1;
         }
         if (ttp_verbose > 2) {
             ttp_print_eth_hdr (frh.eth);
             ttp_print_ipv4_hdr (frh.ip4);
-            ttp_print_shim_hdr (frh.tsh);
+            ttp_print_udp_hdr (frh.udp);
         }
         break;
     default:
@@ -348,7 +353,7 @@ int ttp_skb_dequ (void)
 {
     u32 node;
     bool gw = false;
-    bool t4 = false;
+    bool t3 = false;
     struct sk_buff *skb;
     struct ttp_fsm_event *ev;
     struct ttp_pkt_info pif;
@@ -367,14 +372,14 @@ int ttp_skb_dequ (void)
 
     switch (ntohs (skb->protocol)) {
     case TESLA_ETH_P_TTPOE:
-        gw = frh.tth->l3gw;
+        gw = frh.tth->gway;
         break;
     case ETH_P_IP:
-        if (frh.ip4->protocol != TTP_IPPROTO_TTP) {
+        if (frh.ip4->protocol != IPPROTO_UDP) {
             ttp_skb_drop (skb);
             return 0;
         }
-        t4 = true;
+        t3 = true;
         break;
     default:
         ttp_skb_drop (skb);
@@ -412,7 +417,7 @@ int ttp_skb_dequ (void)
                   cpu_to_be64 (ev->kid),
                   ETH_ALEN/2, frh.tsh->dst_node, ETH_ALEN/2, frh.tsh->src_node);
     }
-    else if (t4) { /* ipv4-encap mode */
+    else if (t3) { /* ipv4-encap mode */
         node = frh.ip4->saddr & ~inet_make_mask (ttp_ipv4_pfxlen); /* get host part */
         ttp_prepare_mac_with_oui (mac, Tesla_Mac_Oui, (u8 *)&node + 1);
         ev->kid = ttp_tag_key_make (mac, frh.ttp->conn_vc, false, true);
@@ -462,7 +467,7 @@ static bool ttp_ipv4_encap_setup (struct sk_buff *skb)
     dip |= ttp_ipv4_prefix;
 
     /* prepare IP header */
-    if (ttp_prepare_ipv4 ((u8 *)frh.ip4, ntohs (frh.tsh->length), sip, dip)) {
+    if (ttp_prepare_ipv4 ((u8 *)frh.ip4, ntohs (frh.udp->len), sip, dip, false)) {
         ether_addr_copy (frh.eth->h_dest, ttp_nhmac);
         frh.eth->h_proto = skb->protocol;
         TTP_DB1 ("%s: skb-len:%d\n", __FUNCTION__, skb->len);
@@ -478,9 +483,8 @@ end:
 static bool ttp_skb_net_setup (struct sk_buff *skb, struct ttp_link_tag *lt, u16 nl,
                                enum ttp_opcodes_enum op)
 {
-    u32 node;
     bool gw = false;
-    bool t4 = false;
+    bool t3 = false;
     struct ttp_frame_hdr frh;
 
     memset (&frh, 0, sizeof (frh));
@@ -490,14 +494,14 @@ static bool ttp_skb_net_setup (struct sk_buff *skb, struct ttp_link_tag *lt, u16
     }
 
     /* setup L4 */
-    gw = lt ? lt->gw3 : 1; /* set gw when no tag - directly reply to skb */
+    gw = lt ? lt->gwf : 1; /* set gw when no tag - directly reply to skb */
     if (!gw) { /* gw flag takes priority */
-        t4 = lt ? lt->tp4 : 0; /* do not assume ipv4 encap when lt == NULL */
+        t3 = lt ? lt->tip : 0; /* do not assume ipv4 encap when lt == NULL */
     }
     frh.ttp->conn_opcode = op;
     frh.ttp->conn_vc = lt ? lt->vci : TTP_MAX_VCID;
 
-    if (t4) { /* ip4 encap */
+    if (t3) { /* ip4 encap */
         if (!ttp_debug_source.ipa) {
             TTP_DBG ("%s: Drop tx-frame dropped: ipv4 'src-ip' not set\n", __FUNCTION__);
             return false;
@@ -518,40 +522,42 @@ static bool ttp_skb_net_setup (struct sk_buff *skb, struct ttp_link_tag *lt, u16
             TTP_DBG ("%s: Drop tx-frame: nhmac unknown\n", __FUNCTION__);
             return false;
         }
-        ttp_prepare_tth ((u8 *)frh.tth, nl + TTP_TTH_HDR_LEN, true);
+        ttp_prepare_tth ((u8 *)frh.tth, nl + TTP_OE_HDRS_LEN, true);
         ttp_setup_ethhdr (frh.eth, NULL, ttp_nhmac);
         if (ttp_verbose > 2) {
             ttp_print_eth_hdr (frh.eth);
         }
     }
     else if (lt) { /* raw ethernet */
-        ttp_prepare_tth ((u8 *)frh.tth, nl + TTP_TTH_HDR_LEN, false);
+        ttp_prepare_tth ((u8 *)frh.tth, nl + TTP_OE_HDRS_LEN, false);
         ttp_setup_ethhdr (frh.eth, lt->mac, NULL);
         if (ttp_verbose > 2) {
             ttp_print_eth_hdr (frh.eth);
         }
     }
-    else { /* pedantic: since all three {gw, t4, lt} can't be NULL */
+    else { /* pedantic: since all three {gw, t3, lt} can't be NULL */
         return false;
     }
 
     /* setup tesla shim */
-    if (t4) {
-        node = ttp_debug_source.ipa & ~inet_make_mask (ttp_ipv4_pfxlen);
-        memmove (frh.tsh->src_node, (u8 *)&node + 1, ETH_ALEN/2);
+    if (t3) {
+        frh.udp->source = 111;
+        frh.udp->dest   = 222;
+        frh.udp->len    = htons (nl + TTP_IP_ENCP_LEN); /* noc-len + transport + udp */
+        frh.udp->check  = 0;
     }
     else {
         memmove (frh.tsh->src_node, &ttp_etype_dev.dev->dev_addr[3], ETH_ALEN/2);
+        if (lt) {
+            memmove (frh.tsh->dst_node, lt->mac, ETH_ALEN/2);
+        }
+        else {
+            memset (frh.tsh->dst_node, 0, ETH_ALEN/2);
+        }
+        frh.tsh->length = htons (nl + TTP_OE_ENCP_LEN); /* noc-len + transport + tsh */
     }
-    if (lt) {
-        memmove (frh.tsh->dst_node, lt->mac, ETH_ALEN/2);
-    }
-    else {
-        memset (frh.tsh->dst_node, 0, ETH_ALEN/2);
-    }
-    frh.tsh->length = htons (nl + TTP_HEADERS_LEN); /* noc-length + shim + transport */
 
-    TTP_DB2 ("%s: skb-len:%d gw:%d ip4:%d\n", __FUNCTION__, skb->len, gw, t4);
+    TTP_DB2 ("%s: skb-len:%d gw:%d ip4:%d\n", __FUNCTION__, skb->len, gw, t3);
     return true;
 }
 
@@ -763,10 +769,10 @@ static int __init ttpoe_init (void)
     ttp_fsm_init ();
 
     if (!ttp_ipv4_pfxlen) {
-        me = ttp_tag_key_make (ttp_debug_source.mac, 0, false, ttp_ipv4_encap);
+        me = ttp_tag_key_make (ttp_etype_dev.dev->dev_addr, 0, false, ttp_ipv4_encap);
         TTP_DBG ("%s: ttp-source:%*phC mytag:[0x%016llx]\n"
                  "       dev:%s nhmac:%*phC ipv4:%d\n", __FUNCTION__, ETH_ALEN,
-                 ttp_debug_source.mac, cpu_to_be64 (me),
+                 ttp_etype_dev.dev->dev_addr, cpu_to_be64 (me),
                  ttp_etype_dev.dev->name, ETH_ALEN, ttp_nhmac, ttp_ipv4_encap);
     }
 

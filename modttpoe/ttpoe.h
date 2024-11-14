@@ -98,12 +98,14 @@ struct ttp_transport_hdr {
 } __attribute__((packed));
 
 
-#define TTP_HEADERS_LEN  (sizeof (struct ttp_tsla_shim_hdr) + \
+/* for raw-ethernet and gateway mode */
+#define TTP_OE_ENCP_LEN  (sizeof (struct ttp_tsla_shim_hdr) + \
                           sizeof (struct ttp_transport_hdr))
-/* for raw-ethernet mode */
-#define TTP_TTH_HDR_LEN  (sizeof (struct ttp_tsla_type_hdr) + TTP_HEADERS_LEN)
+#define TTP_OE_HDRS_LEN  (sizeof (struct ttp_tsla_type_hdr) + TTP_OE_ENCP_LEN)
+
 /* for ipv4-encap mode */
-#define TTP_IP_HDRS_LEN  (sizeof (struct iphdr) + TTP_HEADERS_LEN)
+#define TTP_IP_ENCP_LEN  (sizeof (struct udphdr) + sizeof (struct ttp_transport_hdr))
+#define TTP_IP_HDRS_LEN  (sizeof (struct iphdr)  + TTP_IP_ENCP_LEN)
 
 
 enum ttp_extn_types_enum {
@@ -176,16 +178,19 @@ struct ttp_ttpoe_noc_dat {
 
 
 struct ttp_frame_hdr {
-    struct ethhdr                  *eth;
-    union {                        
-        struct ttp_tsla_type_hdr   *tth;
-        struct iphdr               *ip4;
-        struct ipv6hdr             *ip6;
-    };                             
-    struct ttp_tsla_shim_hdr       *tsh;
-    struct ttp_transport_hdr       *ttp;
-    struct ttp_ttpoe_noc_hdr       *noc;
-    struct ttp_ttpoe_noc_dat       *dat;
+    struct ethhdr                *eth;
+    union {
+        struct ttp_tsla_type_hdr *tth;
+        struct iphdr             *ip4;
+        struct ipv6hdr           *ip6;
+    };
+    union {
+        struct ttp_tsla_shim_hdr *tsh;
+        struct udphdr            *udp;
+    };
+    struct ttp_transport_hdr     *ttp;
+    struct ttp_ttpoe_noc_hdr     *noc;
+    struct ttp_ttpoe_noc_dat     *dat;
 } __attribute__((packed));
 
 
@@ -194,8 +199,8 @@ struct ttp_pkt_info {
     u16 skb_len;  /* saved skb->len */
     u16 noc_len;  /* max value: TTP_NOC_BUF_SIZE */
 
-    u16 tsh_off;
-    u16 ttp_off;
+    u16 tl4_off;  /* tsh (in gw or raw ethernet mode) _or_ udp (in ipv4 encap mode) */
+    u16 ttp_off;  /* ttp transport header offset */
     u16 noc_off;
     u16 dat_off;
 
@@ -208,7 +213,7 @@ struct ttpoe_host_info {
     u32 ipa;           /* source / target ip-address - in ipv4 encap */
     u8  mac[ETH_ALEN]; /* source / target mac-address - in raw/gw */
     u8  vc;            /* vc_id */
-    u8  gw;            /* via l3-gateway */
+    u8  gw;            /* via gateway */
     u8  ve;            /* valid entry */
 };
 

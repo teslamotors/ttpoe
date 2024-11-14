@@ -161,7 +161,7 @@ static const struct kernel_param_ops ttp_param_target_mac_ops = {
     .get = ttp_param_target_mac_get,
 };
 
-module_param_cb (dest_mac, &ttp_param_target_mac_ops, NULL, 0644);
+module_param_cb (dest_mac, &ttp_param_target_mac_ops, NULL, 0664);
 MODULE_PARM_DESC (dest_mac, " ttp destination mac-address: "
                   "e.g. dest_mac=xx:xx:xx:xx:xx:xx)");
 
@@ -202,7 +202,7 @@ static const struct kernel_param_ops ttp_param_target_ve_ops = {
     .get = ttp_param_target_ve_get,
 };
 
-module_param_cb (valid, &ttp_param_target_ve_ops, NULL, 0644);
+module_param_cb (valid, &ttp_param_target_ve_ops, NULL, 0664);
 MODULE_PARM_DESC (valid, "    target is valid (default=0, or 1)");
 
 
@@ -236,7 +236,7 @@ static const struct kernel_param_ops ttp_param_vci_ops = {
     .get = ttp_param_vci_get,
 };
 
-module_param_cb (vci, &ttp_param_vci_ops, NULL, 0644);
+module_param_cb (vci, &ttp_param_vci_ops, NULL, 0664);
 MODULE_PARM_DESC (vci, "      ttp conn-VCI (default=0, 1, 2)");
 
 
@@ -266,8 +266,8 @@ static const struct kernel_param_ops ttp_param_target_use_gw_ops = {
     .get = ttp_param_target_use_gw_get,
 };
 
-module_param_cb (use_gw, &ttp_param_target_use_gw_ops, NULL, 0644);
-MODULE_PARM_DESC (use_gw, "   target uses l3-gateway (default=0, or 1)");
+module_param_cb (use_gw, &ttp_param_target_use_gw_ops, NULL, 0664);
+MODULE_PARM_DESC (use_gw, "   use gateway to reach target (default=0, or 1)");
 
 
 static int ttp_param_nhmac_set (const char *val, const struct kernel_param *kp)
@@ -417,7 +417,7 @@ static int ttp_param_prefix_set (const char *val, const struct kernel_param *kp)
     TTP_DB1 ("%s: set ttp ipv4-prefix: %pI4/%d\n", __FUNCTION__, &ttp_ipv4_prefix,
              ttp_ipv4_pfxlen);
 
-    /* This can get called before __init when params are specified on mod-load cmdline */ 
+    /* This can get called before __init when params are specified on mod-load cmdline */
     if (!ttp_etype_dev.dev) {
         if (!(ttp_etype_dev.dev = dev_get_by_name (&init_net, ttp_dev))) {
             TTP_LOG ("Error: Couldn't 'get' dev:%s - unloading\n", ttp_dev);
@@ -449,7 +449,7 @@ static const struct kernel_param_ops ttp_param_prefix_ops = {
     .get = ttp_param_prefix_get,
 };
 
-module_param_cb (prefix, &ttp_param_prefix_ops, &ttp_ipv4_prefix, 0644);
+module_param_cb (prefix, &ttp_param_prefix_ops, &ttp_ipv4_prefix, 0664);
 MODULE_PARM_DESC (prefix, "   ipv4 prefix: (A.B.C.D/N)");
 
 
@@ -497,7 +497,7 @@ static const struct kernel_param_ops ttp_param_verbose_ops = {
     .get = param_get_int,
 };
 
-module_param_cb (verbose, &ttp_param_verbose_ops, &ttp_verbose, 0644);
+module_param_cb (verbose, &ttp_param_verbose_ops, &ttp_verbose, 0664);
 MODULE_PARM_DESC (verbose, "  kernel log verbosity level (default=(-1), 0, 1, 2, 3)");
 
 
@@ -517,7 +517,7 @@ static const struct kernel_param_ops ttp_param_drop_pct_ops = {
     .get = param_get_int,
 };
 
-module_param_cb (drop_pct, &ttp_param_drop_pct_ops, &ttp_drop_pct, 0644);
+module_param_cb (drop_pct, &ttp_param_drop_pct_ops, &ttp_drop_pct, 0664);
 MODULE_PARM_DESC (drop_pct, " packet drop percent (default=(0), [0:10])");
 
 
@@ -537,7 +537,7 @@ static const struct kernel_param_ops ttp_param_shutdown_ops = {
     .get = param_get_int,
 };
 
-module_param_cb (shutdown, &ttp_param_shutdown_ops, &ttp_shutdown, 0644);
+module_param_cb (shutdown, &ttp_param_shutdown_ops, &ttp_shutdown, 0664);
 MODULE_PARM_DESC (shutdown, " modttpoe shutdown state");
 
 
@@ -658,7 +658,7 @@ static const struct kernel_param_ops ttp_param_debug_target_ops = {
     .get = ttp_param_target_mac_get,
 };
 
-module_param_cb (target, &ttp_param_debug_target_ops, NULL, 0644);
+module_param_cb (target, &ttp_param_debug_target_ops, NULL, 0664);
 MODULE_PARM_DESC (target, "   ttp debug target (24b hex value: "
                   "e.g. target=012345 => [oui]:01:23:45)");
 
@@ -721,7 +721,7 @@ static const struct kernel_param_ops ttp_param_wkstep_ops = {
     .get = ttp_param_wkstep_get,
 };
 
-module_param_cb (wkstep, &ttp_param_wkstep_ops, &ttp_stats.wkq_sz, 0644);
+module_param_cb (wkstep, &ttp_param_wkstep_ops, &ttp_stats.wkq_sz, 0664);
 MODULE_PARM_DESC (wkstep, "   ttp fsm single-step state (default=0)\n"
                   "                          write '0' run freely; '[1-100]'"
                   " set step-size; 's' step");

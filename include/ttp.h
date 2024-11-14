@@ -64,8 +64,8 @@ extern const u32 Tesla_Mac_Oui; /* 3-bytes in host order: (mac[0]<<16)|(mac[1]<<
 #define TTP_IPHDR_VER_V4     4
 #define TTP_IPHDR_VER_V6     6
 #define TTP_IPHDR_IHL        5
-#define TTP_IPPROTO_TTP    146
 #define TTP_IPHDR_TTL        9  /* arbitrary value - needs to be non-zero at a minimum */
+#define TTP_IPPROTO_TTP    146  /* used only in ttp-gw mode; ipv4 mode uses UDP */
 
 #define TTP_NOTRACE   notrace
 #define TTP_NOINLINE  noinline
@@ -124,7 +124,7 @@ static inline int ttp_dev_uevent (
 #endif
     struct device *dev, struct kobj_uevent_env *env)
 {
-    add_uevent_var (env, "DEVMODE=%#o", 0644);
+    add_uevent_var (env, "DEVMODE=%#o", 0666);
     return 0;
 }
 
@@ -176,9 +176,9 @@ struct ttp_tsla_type_hdr {
 
 #if defined (__LITTLE_ENDIAN_BITFIELD)
         u8 resv : 7;
-        u8 l3gw : 1;
+        u8 gway : 1;
 #else /* (__BIG_ENDIAN_BITFIELD) */
-        u8 l3gw : 1;
+        u8 gway : 1;
         u8 resv : 7;
 #endif
     } __attribute__((packed));
@@ -191,7 +191,7 @@ struct ttp_tsla_type_hdr {
 } __attribute__((packed));
 
 
-/* Shim Header (TSH) that follows TTH in L2-format, and IPH in L3-format
+/* Shim Header (TSH) that follows TTH in L2-format, and IPH in GW-format
  *
  *  15  14  13  12  11  10   9   8   7   6   5   4   3   2   1   0
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
@@ -318,9 +318,10 @@ static inline void ttp_print_ipv4_hdr (struct iphdr *ip)
 {
     TTP_DBG ("ip4h: %*ph\n", 10, ip);
     TTP_DBG ("      %*ph\n", (int)sizeof (*ip) - 10, (10 + (u8 *)ip));
-    TTP_DBG ("  ver:%d ihl:%d ttl:%d tos:%02x len:%d proto:%d%s\n",
-             ip->version, ip->ihl, ip->ttl, ip->tos, ntohs (ip->tot_len),
-             ip->protocol, ip->protocol == TTP_IPPROTO_TTP ? " (TTP)" : "");
+    TTP_DBG ("  ver:%d ihl:%d tos:%02x len:%d ttl:%d hcsum:0x%04x protocol:%d%s\n",
+             ip->version, ip->ihl, ip->tos, ntohs (ip->tot_len), ip->ttl,
+             ntohs (ip->check), ip->protocol, ip->protocol == IPPROTO_UDP ? " (UDP)" :
+             ip->protocol == TTP_IPPROTO_TTP ? " (TTP)" : "");
     TTP_DBG (" dip4:%pI4 sip4:%pI4\n", &ip->daddr, &ip->saddr);
 }
 
@@ -329,9 +330,11 @@ static inline void ttp_print_ipv6_hdr (struct ipv6hdr *ipv6)
 {
     TTP_DBG ("ip6h: %*ph\n", 20, ipv6);
     TTP_DBG ("      %*ph\n", (int)sizeof (*ipv6) - 20, (20 + (u8 *)ipv6));
-    TTP_DBG ("  ver:%d len:%d ttl:%d proto:%d%s\n",
-             ipv6->version, ntohs (ipv6->payload_len), ipv6->hop_limit,
-             ipv6->nexthdr, ipv6->nexthdr == TTP_IPPROTO_TTP ? " (TTP)" : "");
+    TTP_DBG ("  ver:%d ihl:5 class:%02x len:%d ttl:%d next-hdr:%d%s\n",
+             ipv6->version, (ipv6->priority << 4) | ((ipv6->flow_lbl[0] & 0xf0) >> 4),
+             ntohs (ipv6->payload_len), ipv6->hop_limit,
+             ipv6->nexthdr, ipv6->nexthdr == IPPROTO_UDP ? " (UDP)" :
+             ipv6->nexthdr == TTP_IPPROTO_TTP ? " (TTP)" : "");
     TTP_DBG (" dip6:%pI6c sip6:%pI6c\n", &ipv6->daddr, &ipv6->saddr);
 }
 
@@ -341,11 +344,11 @@ static inline u8 *ttp_prepare_tth (u8 *pkt, int len, bool gw)
 {
     struct ttp_tsla_type_hdr *tth = (struct ttp_tsla_type_hdr *)pkt;
 
-    tth->styp = 0;
-    tth->vers = 0;
-    tth->tthl = TTP_PROTO_TTHL;
-    tth->l3gw = gw;
-    tth->resv = 0;
+    tth->styp    = 0;
+    tth->vers    = 0;
+    tth->tthl    = TTP_PROTO_TTHL;
+    tth->gway    = gw;
+    tth->resv    = 0;
     tth->tot_len = htons (len);
     return (u8 *)(tth + 1);
 }
@@ -355,7 +358,7 @@ static inline u8 *ttp_prepare_tth (u8 *pkt, int len, bool gw)
  * Fills out ipv4 header in skb with gw-config given src-ip and dst-ip and
  * returns a pointer to the next header
  */
-static inline u8 *ttp_prepare_ipv4 (u8 *pkt, int len, u32 sa4, u32 da4)
+static inline u8 *ttp_prepare_ipv4 (u8 *pkt, int len, u32 sa4, u32 da4, bool gw)
 {
     u16 frame_len;
     struct iphdr *ipv4 = (struct iphdr *)pkt;
@@ -367,14 +370,14 @@ static inline u8 *ttp_prepare_ipv4 (u8 *pkt, int len, u32 sa4, u32 da4)
     frame_len = max (frame_len, TTP_MIN_FRAME_LEN);
 
     memset (ipv4, 0, sizeof (*ipv4));
-    ipv4->version = TTP_IPHDR_VER_V4;
-    ipv4->ihl = TTP_IPHDR_IHL;
-    ipv4->ttl = TTP_IPHDR_TTL;
-    ipv4->protocol = TTP_IPPROTO_TTP;
-    ipv4->saddr = sa4;
-    ipv4->daddr = da4;
-    ipv4->tot_len = htons (frame_len - ETH_HLEN);
-    ipv4->check = ip_fast_csum ((unsigned char *)ipv4, ipv4->ihl);
+    ipv4->version  = TTP_IPHDR_VER_V4;
+    ipv4->ihl      = TTP_IPHDR_IHL;
+    ipv4->ttl      = TTP_IPHDR_TTL;
+    ipv4->protocol = gw ? TTP_IPPROTO_TTP : IPPROTO_UDP;
+    ipv4->saddr    = sa4;
+    ipv4->daddr    = da4;
+    ipv4->tot_len  = htons (frame_len - ETH_HLEN);
+    ipv4->check    = ip_fast_csum ((unsigned char *)ipv4, ipv4->ihl);
 
     return (u8 *)(ipv4 + 1);
 }
@@ -397,11 +400,11 @@ static inline u8 *ttp_prepare_ipv6 (u8 *pkt, int len, const struct in6_addr *sa6
     frame_len = max (frame_len, TTP_MIN_FRAME_LEN);
 
     memset (ipv6, 0, sizeof (*ipv6));
-    ipv6->version = TTP_IPHDR_VER_V6;
-    ipv6->nexthdr = TTP_IPPROTO_TTP;
-    ipv6->hop_limit = TTP_IPHDR_TTL;
-    ipv6->saddr = *sa6;
-    ipv6->daddr = *da6;
+    ipv6->version     = TTP_IPHDR_VER_V6;
+    ipv6->nexthdr     = TTP_IPPROTO_TTP;
+    ipv6->hop_limit   = TTP_IPHDR_TTL;
+    ipv6->saddr       = *sa6;
+    ipv6->daddr       = *da6;
     ipv6->payload_len = htons (frame_len - ETH_HLEN - sizeof (struct ipv6hdr));
 
     return (u8 *)(ipv6 + 1);
@@ -410,19 +413,24 @@ static inline u8 *ttp_prepare_ipv6 (u8 *pkt, int len, const struct in6_addr *sa6
 
 static inline void ttp_print_tsla_type_hdr (const struct ttp_tsla_type_hdr *tth)
 {
-    TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d "
-             "res:0x%02x len:%d\n",
-             tth->styp, tth->vers, tth->tthl, tth->l3gw,
-             tth->resv, ntohs (tth->tot_len));
+    TTP_DBG (" tth: subtyp:%d ver:%d tthl:%d gw:%d res:0x%02x len:%d\n",
+             tth->styp, tth->vers, tth->tthl, tth->gway, tth->resv, ntohs (tth->tot_len));
 }
 
 
 static inline void ttp_print_shim_hdr (const struct ttp_tsla_shim_hdr *tsh)
 {
     TTP_DBG (" tsh: src-node:%*phC dst-node:%*phC length:%d%s%*phC\n",
-             ETH_ALEN/2, tsh->src_node, ETH_ALEN/2, tsh->dst_node,
-             ntohs (tsh->length),
+             ETH_ALEN/2, tsh->src_node, ETH_ALEN/2, tsh->dst_node, ntohs (tsh->length),
              ntohs (tsh->length) == 2 ? " ctrl:" : "",
              ntohs (tsh->length) == 2 ? 2 : 0, tsh + 1);
+}
+
+
+static inline void ttp_print_udp_hdr (const struct udphdr *udp)
+{
+    TTP_DBG (" udp: src-port:%d dst-port:%d cksum:0x%04x length:%d%s\n",
+             udp->source, udp->dest, ntohs (udp->check), ntohs (udp->len),
+             ntohs (udp->len) == 2 ? " (ctrl)" : "");
 }
 #endif

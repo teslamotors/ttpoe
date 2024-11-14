@@ -223,8 +223,8 @@ struct ttp_link_tag {
                     u8  rng :4; /* ring */
 
                     u8  bkt :1; /* hash bucket */
-                    u8  gw3 :1; /* destimation reachable via l3 gw */
-                    u8  tp4 :1; /* ttp over ipv4 */
+                    u8  gwf :1; /* destimation reachable via gateway */
+                    u8  tip :1; /* ttp over ipv4 */
                     u8  _y2 :5; /* reserved0 */
 
                     u8  hvl;    /* hash value */
@@ -302,7 +302,7 @@ extern ttp_fsm_fn ttp_fsm_entry_function[];
 
 extern void ttp_fsm_init (void);
 extern void ttp_fsm_exit (void);
-extern u64  ttp_tag_key_make (const u8 *mac, u8 vc, bool gw, bool t4);
+extern u64  ttp_tag_key_make (const u8 *mac, u8 vc, bool gw, bool t3);
 
 extern int  ttp_tag_add (u64 kid);
 extern void ttp_tag_reset (struct ttp_link_tag *lt);

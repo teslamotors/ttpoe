@@ -57,6 +57,8 @@ selfPfix = ""
 peerPfix = ""
 dropPct  = 0
 sleepSec = 0.0
+selfTgen = True
+peerTgen = True
 
 modpath  = "/sys/module/modttpoe/parameters"
 procpath = "/proc/net/modttpoe"
@@ -85,7 +87,8 @@ def peerHostname (mac):
         for zon in ttpZones:
             if selfhn in zon and peerhn in zon:
                 print (f"Error: Unsupported in 'use-gw': target-node:'{options.target}'"
-                       f" local-node:'{selfhn:02x}' in same zone:'{1 + ttpZones.index(zon)}'")
+                       f" local-node:'{selfhn:02x}' in same zone:"
+                       f"'{1 + ttpZones.index(zon)}'")
                 sys.exit (-1)
     if mac[0] != '0' or mac[1] != '0' or mac[2] != ':' or \
        mac[3] != '0' or mac[4] != '0' or mac[5] != ':':
@@ -114,6 +117,8 @@ def setUpModule():
     global peerPfix
     global dropPct
     global sleepSec
+    global selfTgen
+    global peerTgen
 
     if "-vvv" in sys.argv[1:] or "--vvverbose" in sys.argv[1:]:
         verbose = 3
@@ -272,6 +277,11 @@ def setUpModule():
             print (f"Error: 'self' /dev/noc_debug not 'char' dev (446/0)\n"
                    "HINT: '/dev/noc_debug' may be a plain text file - remove it")
             sys.exit (-1)
+    rv = os.system (f"which trafgen > /dev/null")
+    if rv != 0:
+        if verbose >= 2:
+            print (f"Warning: no trafgen on self")
+        selfTgen = False
     if peerHost:
         po = subprocess.run (['ssh', peerHost, 'ls', '/dev/noc_debug', '2>/dev/null'],
                              stdout=subprocess.PIPE).stdout.decode().strip()
@@ -287,6 +297,11 @@ def setUpModule():
         if rv != 0:
             print (f"Error: Peer device '{peerDev}' not found")
             sys.exit (-1)
+        rv = os.system (f"ssh {peerHost} 'which trafgen > /dev/null'")
+        if rv != 0:
+            if verbose >= 2:
+                print (f"Warning: no trafgen on peer")
+            peerTgen = False
 
     selfLock = f"/mnt/mac/.locks/ttp-host-lock-{selfHost}"
     try:
@@ -352,12 +367,12 @@ def setUpModule():
             print (f" IPv4 Prefix: {pfo} ({'override' if options.prefix else 'default'})")
         if options.ipv4: # set target to allow nhmac to resolve below
             if options.vci: # set 'vc' before setting 'target'
-                rv = os.system (f"echo {connVCI} | sudo tee {modpath}/vci 1>/dev/null")
+                rv = os.system (f"echo {connVCI} > {modpath}/vci 1")
                 if rv != 0:
                     print (f"Error: Set vci on 'self' failed")
                     tearDownModule()
                     sys.exit (-1)
-            rv = os.system (f"echo {peerTgt} | sudo tee {modpath}/target 1>/dev/null")
+            rv = os.system (f"echo {peerTgt} > {modpath}/target")
             if rv != 0:
                 print (f"Error: Set target on 'self' failed")
                 tearDownModule()
@@ -386,8 +401,7 @@ def setUpModule():
                 time.sleep (1)
                 lct = lct - 1
                 continue
-            rv = os.system (f"echo 1 |"
-                            f" sudo tee {modpath}/use_gw 1>/dev/null")
+            rv = os.system (f"echo 1 > {modpath}/use_gw")
             if rv != 0:
                 print (f"Error: Set use_gw on 'self' failed")
                 tearDownModule()
@@ -410,12 +424,12 @@ def setUpModule():
                 print (f" IPv4 nh-mac: {nhmac}")
         if not options.ipv4: # set target after nhmac resolve above
             if options.vci: # set 'vc' before setting 'target'
-                rv = os.system (f"echo {connVCI} | sudo tee {modpath}/vci 1>/dev/null")
+                rv = os.system (f"echo {connVCI} > {modpath}/vci 1")
                 if rv != 0:
                     print (f"Error: Set vci on 'self' failed")
                     tearDownModule()
                     sys.exit (-1)
-            rv = os.system (f"echo {peerTgt} | sudo tee {modpath}/target 1>/dev/null")
+            rv = os.system (f"echo {peerTgt} > {modpath}/target")
             if rv != 0:
                 print (f"Error: Set target on 'self' failed")
                 tearDownModule()
@@ -485,9 +499,8 @@ class Test0_Seq_IDs (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"cat /dev/null > /dev/noc_debug")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
 
     #@unittest.skip ("<comment>")
     def test2_tx1_seq (self):
@@ -496,7 +509,7 @@ class Test0_Seq_IDs (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"cat /mnt/mac/tests/greet | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"cat /mnt/mac/tests/greet > /dev/noc_debug")
         time.sleep (1.0)
         if verbose >= 2:
             x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/greet'")
@@ -514,7 +527,7 @@ class Test0_Seq_IDs (unittest.TestCase):
             print (pfo)
         if needle not in pfo or peerMacL not in pfo:
             self.fail (f"did not find proper TX seq_ID (expected {needle})")
-        os.system (f"cat /mnt/mac/tests/greet | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"cat /mnt/mac/tests/greet > /dev/noc_debug")
         time.sleep (0.1)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
@@ -543,18 +556,15 @@ class Test0_Seq_IDs (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
         if options.vci: # set 'vc' before setting 'target'
-            rv = os.system (f"ssh {peerHost} 'echo {connVCI} "
-                            f" | sudo tee {modpath}/vci 1>/dev/null'")
+            rv = os.system (f"ssh {peerHost} 'echo {connVCI} > {modpath}/vci'")
             if rv != 0:
                 self.fail (f"Error: Set vci {connVCI} on 'peer' failed")
-        rv = os.system (f"ssh {peerHost} 'echo {selfTgt} "
-                        f" | sudo tee {modpath}/target 1>/dev/null'")
+        rv = os.system (f"ssh {peerHost} 'echo {selfTgt} > {modpath}/target'")
         if rv != 0:
             self.fail (f"Error: Set target {selfTgt} on 'peer' failed")
 
-        os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-        os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"cat /dev/null > /dev/noc_debug")
+        os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet > /dev/noc_debug'")
         time.sleep (0.1 + sleepSec)
         if verbose >= 2:
             os.system (f"diff /dev/noc_debug /mnt/mac/tests/greet")
@@ -569,8 +579,7 @@ class Test0_Seq_IDs (unittest.TestCase):
             print (pfo)
         if needle not in pfo or peerMacL not in pfo:
             self.fail (f"did not find proper RX seq_ID (expected rx:2)")
-        os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet > /dev/noc_debug'")
         time.sleep (0.1 + sleepSec)
         pf = open (f"{procpath}/tags", "r")
         pfo = pf.read()
@@ -587,19 +596,15 @@ class Test0_Seq_IDs (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
-        os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"cat /dev/null > /dev/noc_debug")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
+        os.system (f"cat /dev/null > /dev/noc_debug")
         time.sleep (0.1)
-        os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/4000 |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
-        os.system (f"ssh {peerHost} 'echo -n expect-this-to-be-dropped |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/4000 > /dev/noc_debug'")
+        os.system (f"ssh {peerHost} 'echo -n expect-this-to-be-dropped > /dev/noc_debug'")
         time.sleep (0.1)
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
-        os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
+        os.system (f"cat /dev/null > /dev/noc_debug")
 
 
 #@unittest.skip ("<comment>")
@@ -631,10 +636,9 @@ class Test1_Proc (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         time.sleep (0.1 + sleepSec)
-        os.system (f"cat /mnt/mac/tests/500 | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"cat /mnt/mac/tests/500 > /dev/noc_debug")
         time.sleep (0.1 + sleepSec)
         if verbose >= 2:
             x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/500'")
@@ -651,10 +655,9 @@ class Test1_Proc (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         time.sleep (0.1 + sleepSec)
-        os.system (f"cat /mnt/mac/tests/1000 | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"cat /mnt/mac/tests/1000 > /dev/noc_debug")
         time.sleep (0.1 + sleepSec)
         if verbose >= 2:
             x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/1000'")
@@ -671,10 +674,9 @@ class Test1_Proc (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         time.sleep (0.1 + sleepSec)
-        os.system (f"cat /mnt/mac/tests/2000 | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"cat /mnt/mac/tests/2000 > /dev/noc_debug")
         time.sleep (0.1 + sleepSec)
         if verbose >= 2:
             x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/2000'")
@@ -691,10 +693,9 @@ class Test1_Proc (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         time.sleep (0.1 + sleepSec)
-        os.system (f"cat /mnt/mac/tests/3000 | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"cat /mnt/mac/tests/3000 > /dev/noc_debug")
         time.sleep (0.1 + sleepSec)
         if verbose >= 2:
             x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/3000'")
@@ -711,10 +712,9 @@ class Test1_Proc (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         time.sleep (0.1 + sleepSec)
-        os.system (f"cat /mnt/mac/tests/4000 | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"cat /mnt/mac/tests/4000 > /dev/noc_debug")
         time.sleep (1.1 + sleepSec)
         if verbose >= 2:
             x = os.system (f"ssh {peerHost} 'diff /dev/noc_debug /mnt/mac/tests/4000'")
@@ -733,6 +733,8 @@ class Test2_Packet (unittest.TestCase):
             self.skipTest (f"no packet tests")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
+        if not peerTgen:
+            self.skipTest (f"no trafgen on peer")
 
         os.system (f"ssh {peerHost}"
                    f" 'cd /tmp; sudo trafgen -p -o {peerDev} "
@@ -767,6 +769,8 @@ class Test2_Packet (unittest.TestCase):
             self.skipTest (f"no packet tests")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
+        if not selfTgen:
+            self.skipTest (f"no trafgen on self")
 
         os.system (f"cd /tmp; sudo trafgen -p -o {selfDev}"
                    f" -i /mnt/mac/tests/ttp_common.cfg -n 1"
@@ -800,6 +804,8 @@ class Test2_Packet (unittest.TestCase):
             self.skipTest (f"no packet tests")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
+        if not peerTgen:
+            self.skipTest (f"no trafgen on peer")
 
         os.system
         (f"ssh {peerHost}"
@@ -845,6 +851,8 @@ class Test2_Packet (unittest.TestCase):
             self.skipTest (f"no packet tests")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
+        if not selfTgen:
+            self.skipTest (f"no trafgen on self")
 
         os.system
         (f"cd /tmp; sudo trafgen -p -o {selfDev}"
@@ -897,6 +905,8 @@ class Test2_Packet (unittest.TestCase):
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
+        if not peerTgen:
+            self.skipTest (f"no trafgen on peer")
 
         os.system (f"ssh {peerHost}"
                    f" 'cd /tmp; sudo trafgen -p -o {peerDev}"
@@ -939,6 +949,8 @@ class Test2_Packet (unittest.TestCase):
             self.skipTest (f"requires module reload")
         if not peerHost:
             self.skipTest (f"--no-remote specified")
+        if not selfTgen:
+            self.skipTest (f"no trafgen on self")
 
         os.system (f"cd /tmp; sudo trafgen -p -o {selfDev}"
                    f" -i /mnt/mac/tests/ttp_common.cfg -n 1"
@@ -984,12 +996,10 @@ class Test3_Noc_db (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-        os.system (f"cat /mnt/mac/tests/greet | sudo tee /dev/noc_debug > /dev/null")
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
-        os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"cat /dev/null > /dev/noc_debug")
+        os.system (f"cat /mnt/mac/tests/greet > /dev/noc_debug")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
+        os.system (f"ssh {peerHost} 'cat /mnt/mac/tests/greet > /dev/noc_debug'")
         if verbose >= 2:
             print()
             os.system (f"cat /dev/noc_debug")
@@ -1007,10 +1017,9 @@ class Test4_Traffic (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
-        os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-        os.system (f"cat /mnt/mac/tests/500 | sudo tee /dev/noc_debug > /dev/null")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
+        os.system (f"cat /dev/null")
+        os.system (f"cat /mnt/mac/tests/500 > /dev/noc_debug")
 
     def test2_traffic (self):
         if options.no_traffic:
@@ -1024,11 +1033,10 @@ class Test4_Traffic (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         for rep in range (1, ra):
-            os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-            os.system (f"cat /mnt/mac/tests/1000 | sudo tee /dev/noc_debug > /dev/null")
+            os.system (f"cat /dev/null > /dev/null")
+            os.system (f"cat /mnt/mac/tests/1000 > /dev/noc_debug")
 
     #@unittest.skip ("<comment>")
     def test3_traffic (self):
@@ -1039,11 +1047,10 @@ class Test4_Traffic (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         for rep in range (1, 100):
-            os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-            os.system (f"cat /mnt/mac/tests/2000 | sudo tee /dev/noc_debug > /dev/null")
+            os.system (f"cat /dev/null > /dev/null")
+            os.system (f"cat /mnt/mac/tests/2000 > /dev/noc_debug")
 
     def test4_traffic (self):
         if options.no_traffic:
@@ -1053,11 +1060,10 @@ class Test4_Traffic (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         for rep in range (1, 20):
-            os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-            os.system (f"cat /mnt/mac/tests/3000 | sudo tee /dev/noc_debug > /dev/null")
+            os.system (f"cat /dev/null > /dev/null")
+            os.system (f"cat /mnt/mac/tests/3000 > /dev/noc_debug")
 
     def test5_traffic (self):
         if options.no_traffic:
@@ -1067,11 +1073,10 @@ class Test4_Traffic (unittest.TestCase):
         if not peerHost:
             self.skipTest (f"--no-remote specified")
 
-        os.system (f"ssh {peerHost} 'cat /dev/null |"
-                   f" sudo tee /dev/noc_debug > /dev/null'")
+        os.system (f"ssh {peerHost} 'cat /dev/null > /dev/noc_debug'")
         for rep in range (1, 100): # crashes when using 190
-            os.system (f"cat /dev/null | sudo tee /dev/noc_debug > /dev/null")
-            os.system (f"cat /mnt/mac/tests/4000 | sudo tee /dev/noc_debug > /dev/null")
+            os.system (f"cat /dev/null > /dev/null")
+            os.system (f"cat /mnt/mac/tests/4000 > /dev/noc_debug")
 
 #@unittest.skip ("<comment>")
 class Test5_Cleanup (unittest.TestCase):
