@@ -46,15 +46,7 @@
 #define TESLA_ETH_P_TTPOE 0x9ac6
 
 /* Assigned to Tesla for TTPoE: Custom MAC OUI "98-ED-5C" */
-#define TESLA_MAC_OUI0    0x98
-#define TESLA_MAC_OUI1    0xed
-#define TESLA_MAC_OUI2    0x5c
-#define TESLA_MAC_OUI     ((TESLA_MAC_OUI0<<16) | (TESLA_MAC_OUI1<<8) | TESLA_MAC_OUI2)
-
-extern const u8  Tesla_Mac_Oui0;
-extern const u8  Tesla_Mac_Oui1;
-extern const u8  Tesla_Mac_Oui2;
-extern const u32 Tesla_Mac_Oui; /* 3-bytes in host order: (mac[0]<<16)|(mac[1]<<8)|mac[2]) */
+#define TESLA_MAC_OUI     ((u32)(((0x98 << 16) | (0xed << 8) | 0x5c)))
 
 #define TTP_MIN_FRAME_LEN ((u16)64)   /* Ethernet minimum frame len */
 #define TTP_MAX_FRAME_LEN ((u16)1536) /* Ethernet MAXimum frame len */
@@ -66,6 +58,9 @@ extern const u32 Tesla_Mac_Oui; /* 3-bytes in host order: (mac[0]<<16)|(mac[1]<<
 #define TTP_IPHDR_IHL        5
 #define TTP_IPHDR_TTL        9  /* arbitrary value - needs to be non-zero at a minimum */
 #define TTP_IPPROTO_TTP    146  /* used only in ttp-gw mode; ipv4 mode uses UDP */
+
+#define TTP_IPUDP_SRCPORT  111  /* arbitrary for now */
+#define TTP_IPUDP_DSTPORT  222  /* arbitrary for now */
 
 #define TTP_NOTRACE   notrace
 #define TTP_NOINLINE  noinline
@@ -285,8 +280,8 @@ static inline u8 ttp_tag_index_hash_calc (const u8 *mac)
 /* This routine combines oui[3] with mac24[3] to prepare a full mac[6] */
 static inline void ttp_prepare_mac_with_oui (u8 *mac, const u32 oui, const u8 *mac24)
 {
-    if (!ttp_mem_is_zero (mac24, ETH_ALEN/2)) {
-        *((u32 *)mac) = htonl (oui << 8);
+    *((u32 *)mac) = htonl (oui << 8);
+    if (mac24) {
         memcpy (mac + 3, mac24, ETH_ALEN/2);
     }
 }

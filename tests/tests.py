@@ -65,8 +65,8 @@ procpath = "/proc/net/modttpoe"
 
 ttpZones = [[0x1,  0x2,  0x3,  0x10],
             [0x4,  0x5,  0x6,  0x11],
-            [0x7,  0x8,  0x9],
-            [0xa,  0xb,  0xc],
+            [0x7,  0x8,  0x9,  0x71],
+            [0xa,  0xb,  0xc,  0x72],
             [0x21, 0x22, 0x23, 0x24]]
 
 def getDefaultEthDev():
@@ -401,11 +401,12 @@ def setUpModule():
                 time.sleep (1)
                 lct = lct - 1
                 continue
-            rv = os.system (f"echo 1 > {modpath}/use_gw")
-            if rv != 0:
-                print (f"Error: Set use_gw on 'self' failed")
-                tearDownModule()
-                sys.exit (-1)
+            if not options.ipv4:
+                rv = os.system (f"echo 1 > {modpath}/use_gw")
+                if rv != 0:
+                    print (f"Error: Set use_gw on 'self' failed")
+                    tearDownModule()
+                    sys.exit (-1)
             break
         if lct == 0:
             if options.ipv4:

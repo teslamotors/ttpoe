@@ -38,10 +38,11 @@ zons = [[0x1,  0x2,  0x3],
         [0x7,  0x8,  0x9],
         [0xa,  0xb,  0xc]]
 
-zu20 = [0x10, 0x11]             # ub20 nodes (--u20)
-zutm = [0x21, 0x22, 0x23, 0x24] # utm  nodes (--utm)
+zuba = [0x10, 0x11, 0x71, 0x72] # ubuntu.20x and alpine-linux nodes (--uba)
+zutm = [0x21, 0x22, 0x23, 0x24] # utm nodes (--utm)
 
 # Functional variables
+totl = 0
 totn = 0
 runs = []
 ktst = ""
@@ -101,8 +102,7 @@ def gen_unique_random_runs (lists):
 def setup_test():
     if not gen_unique_random_runs (zons):
         if not options.quiet:
-            print (f" {yellow}Failed to generate {int(totn/2)} tests:"
-                   f" try again!{clear}")
+            print (f" {yellow}Failed to generate {int(totn/2)} tests: retrying!{clear}")
         return False
     else:
         with open('/tmp/fxrun.sh', 'w') as f:
@@ -113,9 +113,9 @@ def setup_test():
                     if not options.quiet:
                         print ("(ssh node-%02x /mnt/mac/tests/run.sh --target=%02x"
                                f" {encp} {ktst} 2>/dev/null 1>/dev/null"
-                               " && echo '  %d: node-%02x <-> node-%02x"
-                               f" [{green}ok{clear}]'"
-                               " || echo '  %d: node-%02x <-> node-%02x"
+                               " && echo '  %2d: node-%02x <-> node-%02x"
+                               f" [{green}pass{clear}]'"
+                               " || echo '  %2d: node-%02x <-> node-%02x"
                                f" [{red}fail{clear}]') %s"
                                % (ri[0], ri[1],
                                   runs.index(ri)+1, ri[1], ri[0],
@@ -131,14 +131,14 @@ def setup_test():
                     else:
                         print (f"\n#echo '   Start {len(runs)} tests; Wait to end'\n")
                 print ("wait\n")
-        subprocess.run (["chmod", "755", "/tmp/fxrun.sh"])
-        if not options.quiet:
-            print (f" {green}Generated {len(runs)} tests:{clear}")
-        if options.verbose:
-            for ri in runs:
-                print ("  %d: node-%02x <-> node-%02x [%ssetup%s]"
-                       % (runs.index(ri)+1, ri[0], ri[1], green, clear))
-        return True
+    subprocess.run (["chmod", "755", "/tmp/fxrun.sh"])
+    if not options.quiet:
+        print (f" {green}Generated {len(runs)} tests:{clear}")
+    if options.verbose:
+        for ri in runs:
+            print ("  %2d: node-%02x <-> node-%02x [%ssetup%s]"
+                   % (runs.index(ri)+1, ri[0], ri[1], blue, clear))
+    return True
 
 def run_test (rn, mx):
     if dryr:
@@ -168,8 +168,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument ('-a', '--all', action='store_true',
                          help='equivalent to -cub -n5 -w10')
-    parser.add_argument ('-b', '--b20', action='store_true',
-                         help='include uBuntu20 nodes [10,11]')
     parser.add_argument ('-c', '--clr', action='store_true',
                          help='clears screen before each run')
     parser.add_argument ('-d', '--dry', action='store_true',
@@ -184,6 +182,8 @@ if __name__ == '__main__':
                          help='succeeds quietly: reports failures ')
     parser.add_argument ('-s', '--ser', action='store_true',
                          help='run tests in serial (default: parallel)')
+    parser.add_argument ('-b', '--uba', action='store_true',
+                         help='include ubuntu.20x and alpine-linux nodes [10,11,71,72]')
     parser.add_argument ('-u', '--utm', action='store_true',
                          help='include UTM nodes [21,..,24]')
     parser.add_argument ('-v', '--verbose', action='store_true',
@@ -200,8 +200,10 @@ if __name__ == '__main__':
     clrs = options.all
     if options.all:
         zons.append (zutm)
-        zons[0].append (zu20[0])
-        zons[1].append (zu20[1])
+        zons[0].append (zuba[0])
+        zons[1].append (zuba[1])
+        zons[2].append (zuba[2])
+        zons[3].append (zuba[3])
 
     # other options processing
     prll = not options.ser
@@ -216,9 +218,11 @@ if __name__ == '__main__':
     # include nodes as specified
     if options.utm:
         zons.append (zutm)
-    if options.b20:
-        zons[0].append (zu20[0])
-        zons[1].append (zu20[1])
+    if options.uba:
+        zons[0].append (zuba[0])
+        zons[1].append (zuba[1])
+        zons[2].append (zuba[2])
+        zons[3].append (zuba[3])
 
     if options.min:
         ktst = "-k Test0"
@@ -233,6 +237,7 @@ if __name__ == '__main__':
 
     for zn in zons:
         totn += len(zn)
+    totl = totn
     if totn % 2:
         totn = totn-1
     if dryr:
@@ -240,7 +245,7 @@ if __name__ == '__main__':
         slpt = 0.25
     for xn in range (nrun):
         if not options.quiet:
-            print (f"{blue}Cross-test: Nodes:{totn} Zones:{len(zons)}{clear}") \
+            print (f"{blue}Cross-test: Nodes:{totn}/{totl} Zones:{len(zons)}{clear}") \
                 if nrun == 1 else \
                    print (f"{blue}Cross-tests: Runs:{nrun} Nodes:{totn} "
                           f"Zones:{len(zons)}{clear}")

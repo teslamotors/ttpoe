@@ -56,6 +56,7 @@
 #include <linux/skbuff.h>
 #include <linux/etherdevice.h>
 #include <linux/netdevice.h>
+#include <linux/inetdevice.h>
 #include <linux/inet.h>
 #include <linux/types.h>
 #include <linux/bitops.h>
@@ -94,7 +95,8 @@ struct ttpoe_host_info ttp_debug_target;
 
 int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_host_info *tg)
 {
-    u64 tkid, skid;
+    u64 tkid;
+    u32 node, mask;
     u8  mac[ETH_ALEN];
 
     if (!kid) {
@@ -103,39 +105,27 @@ int ttpoe_noc_debug_tgt (u64 *kid, struct ttpoe_host_info *tg)
     if (!tg->ve) {
         return -EHOSTDOWN;
     }
-    if (!is_valid_ether_addr (tg->mac)) {
-        return -EDESTADDRREQ;
-    }
-
     if (!ttp_ipv4_encap) {
-        if (tg->mac[0] != Tesla_Mac_Oui0 || tg->mac[1] != Tesla_Mac_Oui1 ||
-            tg->mac[2] != Tesla_Mac_Oui2) {
-            /* don't create tag for target; it could be a gw-ctrl pkt */
-            return -EADDRNOTAVAIL;
+        if (!is_valid_ether_addr (tg->mac)) {
+            return -EDESTADDRREQ;
         }
+        ttp_prepare_mac_with_oui (mac, TESLA_MAC_OUI, &tg->mac[3]);
+        if (tg->gw && memcmp (tg->mac, mac, ETH_ALEN/2)) {
+            /* don't create tag for target and return; it could be a gw-ctrl pkt */
+            return 0;
+        }
+        tkid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_ipv4_encap);
     }
-
-    /* common tesla oui */
-    mac[0] = Tesla_Mac_Oui0;
-    mac[1] = Tesla_Mac_Oui1;
-    mac[2] = Tesla_Mac_Oui2;
-
-    /* source mac */
-    mac[3] = ttp_debug_source.mac[3];
-    mac[4] = ttp_debug_source.mac[4];
-    mac[5] = ttp_debug_source.mac[5];
-
-    skid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_ipv4_encap);
-
-    /* dest mac */
-    mac[3] = tg->mac[3];
-    mac[4] = tg->mac[4];
-    mac[5] = tg->mac[5];
-
-    tkid = ttp_tag_key_make (mac, tg->vc, tg->gw, ttp_ipv4_encap);
-
-    /* check source kid == target kid */
-    if (skid == tkid) {
+    else {
+        if (!tg->ipa || !ttp_ipv4_pfxlen) {
+            return -EDESTADDRREQ;
+        }
+        mask = inet_make_mask (ttp_ipv4_pfxlen);
+        node = tg->ipa & ~mask; /* get host part */
+        ttp_prepare_mac_with_oui (mac, TESLA_MAC_OUI, (u8 *)&node + 1);
+        tkid = ttp_tag_key_make (mac, tg->vc, false, ttp_ipv4_encap);
+    }
+    if (tkid == ttp_debug_source.kid) {
         return -EADDRINUSE;
     }
 
@@ -298,10 +288,19 @@ static ssize_t ttpoe_noc_debug_write (struct file *filp, const char __user *user
         return -EHOSTDOWN;
     }
 
-    if (!is_valid_ether_addr (ttp_debug_target.mac)) {
-        TTP_DBG ("%s: Error: Invalid target.vc: %*phC.%d\n", __FUNCTION__,
-                 ETH_ALEN, ttp_debug_target.mac, ttp_debug_target.vc);
-        return -EADDRNOTAVAIL;
+    if (!ttp_ipv4_encap) {
+        if (!is_valid_ether_addr (ttp_debug_target.mac)) {
+            TTP_DBG ("%s: Error: Invalid target.vc: %*phC.%d\n", __FUNCTION__,
+                     ETH_ALEN, ttp_debug_target.mac, ttp_debug_target.vc);
+            return -EADDRNOTAVAIL;
+        }
+    }
+    else {
+        if (!ttp_debug_target.ipa) {
+            TTP_DBG ("%s: Error: Invalid target.vc: %pi$.%d\n", __FUNCTION__,
+                     &ttp_debug_target.ipa, ttp_debug_target.vc);
+            return -EADDRNOTAVAIL;
+        }
     }
 
     if (!(buf = ttp_skb_aloc (&skb, nbytes))) {

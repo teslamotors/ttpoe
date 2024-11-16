@@ -308,9 +308,9 @@ static int ttpoe_proc_target_show (struct seq_file *seq, void *v)
         return 0;
     }
 
-    seq_printf (seq, "target-mac:%*phC  valid:%d  vci:%d  gw:%d  nhmac:%*phC\n",
-                ETH_ALEN, ttp_debug_target.mac, ttp_debug_target.ve,
-                ttp_debug_target.vc, ttp_debug_target.gw, ETH_ALEN, ttp_nhmac);
+    seq_printf (seq, "target: mac:%*phC valid:%d vci:%d gw:%d ipv4:%d ipa:%pI4\n",
+                ETH_ALEN, ttp_debug_target.mac, ttp_debug_target.ve, ttp_debug_target.vc,
+                ttp_debug_target.gw, ttp_debug_target.ip, &ttp_debug_target.ipa);
 
     return 0;
 }

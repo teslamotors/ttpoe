@@ -62,8 +62,6 @@ int   ttp_verbose  = -1;
 int   ttp_shutdown =  1; /* 'DOWN' by default - enabled at init after checking */
 int   ttp_drop_pct =  0; /* drop percent = 0% by default */
 
-const u32 Tesla_Mac_Oui  = TESLA_MAC_OUI;
-
 struct ttp_timer ttp_nh_mac_tmr = {.exp = TTP_NH_MAC_TRY_TMR, .max = 5};
 struct ttp_timer ttp_gw_ctl_tmr = {.exp = TTP_GW_CTL_ADV_TMR};
 
@@ -118,7 +116,7 @@ static void ttpip_mcast_mac_create (u8 *mac)
     u32 imac; /* holds lower 3 bytes - similar to shim */
 
     imac = htonl (0xFFFFFF << 8); /* makes each lower 3 byte = 0xff */
-    ttp_prepare_mac_with_oui (mac, Tesla_Mac_Oui, (u8 *)&imac);
+    ttp_prepare_mac_with_oui (mac, TESLA_MAC_OUI, (u8 *)&imac);
     mac[0] |= 0x3; /* convert to multicast link-local mac address */
 }
 
@@ -1556,8 +1554,8 @@ static int ttpip_frm_recv (struct sk_buff *skb, struct net_device *dev,
     tsh = (struct ttp_tsla_shim_hdr *)(tth + 1);
 
     /* Decode shim src/dst_node fields */
-    ttp_prepare_mac_with_oui (leh.h_dest, Tesla_Mac_Oui, tsh->dst_node);
-    ttp_prepare_mac_with_oui (leh.h_source, Tesla_Mac_Oui, tsh->src_node);
+    ttp_prepare_mac_with_oui (leh.h_dest,   TESLA_MAC_OUI, tsh->dst_node);
+    ttp_prepare_mac_with_oui (leh.h_source, TESLA_MAC_OUI, tsh->src_node);
 
     if (ttp_verbose > 1) {
         if ((is_valid_ether_addr (leh.h_source) && is_valid_ether_addr (leh.h_dest) &&
@@ -1785,8 +1783,8 @@ static int ttpip_pkt_recv (struct sk_buff *skb, struct net_device *dev,
     }
 
     /* Decode shim src/dst_node fields */
-    ttp_prepare_mac_with_oui (leh.h_dest, Tesla_Mac_Oui, tsh->dst_node);
-    ttp_prepare_mac_with_oui (leh.h_source, Tesla_Mac_Oui, tsh->src_node);
+    ttp_prepare_mac_with_oui (leh.h_dest,   TESLA_MAC_OUI, tsh->dst_node);
+    ttp_prepare_mac_with_oui (leh.h_source, TESLA_MAC_OUI, tsh->src_node);
 
     /* Prepare TTPoE frame to forward to destination ttp-node */
     skb_push (skb, sizeof (struct ttp_tsla_type_hdr)); /* add tesla-type header */

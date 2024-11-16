@@ -210,10 +210,12 @@ struct ttp_pkt_info {
 
 
 struct ttpoe_host_info {
+    u64 kid;
     u32 ipa;           /* source / target ip-address - in ipv4 encap */
     u8  mac[ETH_ALEN]; /* source / target mac-address - in raw/gw */
     u8  vc;            /* vc_id */
     u8  gw;            /* via gateway */
+    u8  ip;            /* ipv4 encap */
     u8  ve;            /* valid entry */
 };
 
