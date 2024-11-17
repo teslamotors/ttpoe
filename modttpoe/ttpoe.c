@@ -161,8 +161,7 @@ void ttp_skb_xmit (struct sk_buff *skb)
     }
     if (ttp_shutdown) {
         TTP_DBG ("%s: <<- Tx frame dropped: ttp is shutdown\n", __FUNCTION__);
-        ttp_skb_drop (skb);
-        return;
+        goto drop;
     }
 
     ttp_skb_pars (skb, &frh, NULL);
@@ -170,6 +169,10 @@ void ttp_skb_xmit (struct sk_buff *skb)
     ttpoe_parse_print (skb, TTP_TX, 1);
     atomic_inc (&ttp_stats.skb_tx);
     dev_queue_xmit (skb);
+    return;
+
+drop:
+    ttp_skb_drop (skb);
 }
 
 
@@ -213,9 +216,7 @@ static bool ttp_tsk_move (struct ttp_fsm_event *ev, struct sk_buff **skb)
 static void ttp_setup_ethhdr (struct ethhdr *eth, const u8 *dmac_low, const u8 *nhmac)
 {
     eth->h_proto = htons (TESLA_ETH_P_TTPOE);
-
     BUG_ON (!(eth && (dmac_low || nhmac)));
-
     memmove (eth->h_source, ttp_etype_dev.dev->dev_addr, ETH_ALEN);
 
     if (dmac_low) {
@@ -247,13 +248,15 @@ u16 ttp_skb_pars (const struct sk_buff *skb, struct ttp_frame_hdr *fh,
                   struct ttp_pkt_info *pi)
 {
     u8 *pkp;
-    struct ttp_pkt_info lpi = {0};
+    struct ttp_pkt_info lpi;
     struct ttp_frame_hdr lfh;
 
     if (!fh) {
+        memset (&lfh, 0, sizeof (lfh));
         fh = &lfh;
     }
     if (!pi) {
+        memset (&lpi, 0, sizeof (lpi));
         pi = &lpi;
     }
 
@@ -278,7 +281,7 @@ u16 ttp_skb_pars (const struct sk_buff *skb, struct ttp_frame_hdr *fh,
     else {
         TTP_VBG ("%s: len:%d dev:%s etype:0x%04x\n", __FUNCTION__,
                  skb->len, skb->dev->name, htons (skb->protocol));
-        return 0; /* unsupported Etype */
+        return 0; /* unsupported etype */
     }
 
     fh->ttp = (struct ttp_transport_hdr *)(pkp + ETH_HLEN + pi->ttp_off);
@@ -301,23 +304,12 @@ static int ttpoe_parse_check (struct sk_buff *skb)
 
     switch (ntohs (skb->protocol)) {
     case TESLA_ETH_P_TTPOE:
-        if (frh.tth->tthl != TTP_PROTO_TTHL) {
-            TTP_DB1 ("%s: Incorrect TTP-Hdr-Len:%d\n", __FUNCTION__, frh.tth->tthl);
-            return -1;
-        }
         if (ttp_verbose > 2) {
             ttp_print_eth_hdr (frh.eth);
             ttp_print_shim_hdr (frh.tsh);
         }
         break;
     case ETH_P_IP:
-        if (frh.ip4->ihl != TTP_IPHDR_IHL) {
-            TTP_DB1 ("%s: Incorrect IP-Hdr-len:%d\n", __FUNCTION__, frh.ip4->ihl);
-            return -1;
-        }
-        if (frh.ip4->protocol != IPPROTO_UDP) {
-            return -1;
-        }
         if (ttp_verbose > 2) {
             ttp_print_eth_hdr (frh.eth);
             ttp_print_ipv4_hdr (frh.ip4);
@@ -325,15 +317,15 @@ static int ttpoe_parse_check (struct sk_buff *skb)
         }
         break;
     default:
-        TTP_DB1 ("%s: UNEXPECTED: 0x%04x\n", __FUNCTION__, ntohs (skb->protocol));
-        return -1;
+        TTP_DB2 ("%s: Error: etype: 0x%04x\n", __FUNCTION__, ntohs (skb->protocol));
+        return -EINVAL;
         break;
     }
 
     if (skb->len < TTP_MIN_FRAME_LEN) {
-        TTP_DB1 ("%s: UNEXPECTED ERROR: frame len (%d) too small (expected %d)\n",
-                 __FUNCTION__, skb->len, TTP_MIN_FRAME_LEN);
-        return -1;
+        TTP_DB2 ("%s: Error: frame len (%d) too small (expected %d)\n", __FUNCTION__,
+                 skb->len, TTP_MIN_FRAME_LEN);
+        return -EINVAL;
     }
     return 0;
 }
@@ -354,10 +346,9 @@ int ttp_skb_dequ (void)
         return 0;
     }
 
+    ttpoe_parse_print (skb, TTP_RX, 1);
     memset (&frh, 0, sizeof (frh));
     memset (&pif, 0, sizeof (pif));
-
-    ttpoe_parse_print (skb, TTP_RX, 1);
     ttp_skb_pars (skb, &frh, &pif);
 
     switch (ntohs (skb->protocol)) {
@@ -365,32 +356,22 @@ int ttp_skb_dequ (void)
         gw = frh.tth->gway;
         break;
     case ETH_P_IP:
-        if (frh.ip4->protocol != IPPROTO_UDP) {
-            ttp_skb_drop (skb);
-            return 0;
-        }
         t3 = true;
         break;
     default:
-        ttp_skb_drop (skb);
-        return 0;
+        goto drop;
     }
 
     if (!TTP_OPCODE_IS_VALID (frh.ttp->conn_opcode)) {
         TTP_DBG ("%s: INVALID opcode:%d\n", __FUNCTION__, frh.ttp->conn_opcode);
-        ttp_skb_drop (skb);
-        return 0;
+        goto drop;
     }
-
     if (!TTP_VC_ID__IS_VALID (frh.ttp->conn_vc)) {
         TTP_DBG ("%s: INVALID vc-id:%d\n", __FUNCTION__, frh.ttp->conn_vc);
-        ttp_skb_drop (skb);
-        return 0;
+        goto drop;
     }
-
     if (!ttp_evt_pget (&ev)) {
-        ttp_skb_drop (skb);
-        return 0;
+        goto drop;
     }
 
     atomic_inc (&ttp_stats.frm_ct);
@@ -423,8 +404,11 @@ int ttp_skb_dequ (void)
 
     ttp_evt_enqu (ev);
     TTP_EVLOG (ev, TTP_LG__PKT_RX, frh.ttp->conn_opcode);
-
     return 1;
+
+drop:
+    ttp_skb_drop (skb);
+    return 0;
 }
 
 
@@ -530,8 +514,8 @@ static bool ttp_skb_net_setup (struct sk_buff *skb, struct ttp_link_tag *lt, u16
     }
     if (t3) {
         /* setup udp header */
-        frh.udp->source = TTP_IPUDP_SRCPORT;
-        frh.udp->dest   = TTP_IPUDP_DSTPORT;
+        frh.udp->source = htons (TTP_IPUDP_SRCPORT);
+        frh.udp->dest   = htons (TTP_IPUDP_DSTPORT);
         frh.udp->len    = htons (nl + TTP_IP_ENCP_LEN); /* noc-len + transport + udp */
         frh.udp->check  = 0;
     }
@@ -577,18 +561,15 @@ bool ttp_skb_prep (struct sk_buff **skbp, struct ttp_fsm_event *qev,
         new = true;
     }
     if (!ttp_skb_net_setup (skb, lt, nl, op)) {
-        ttp_skb_drop (skb);
-        return false;
+        goto drop;
     }
     if (ttp_ipv4_encap) { /* ipv4 encap mode */
         if (!ttp_ipv4_encap_setup (skb)) {
-            ttp_skb_drop (skb);
-            return false;
+            goto drop;
         }
     }
     if (ttpoe_parse_check (skb)) {
-        ttp_skb_drop (skb);
-        return false;
+        goto drop;
     }
     BUG_ON (qev->tsk);
     *skbp = skb;
@@ -596,6 +577,10 @@ bool ttp_skb_prep (struct sk_buff **skbp, struct ttp_fsm_event *qev,
     TTP_DB2 ("%s: new:%d skb-len:%d noc-len:%d ev:%s etype:0x%04x\n", __FUNCTION__,
               new, skb->len, nl, TTP_EVENT_NAME (qev->evt), htons (skb->protocol));
     return true;
+
+drop:
+    ttp_skb_drop (skb);
+    return false;
 }
 
 
@@ -605,10 +590,10 @@ static void ttp_gwmacadv (struct sk_buff *skb)
     if (ttp_skb_net_setup (skb, NULL, 2, TTP_OP__TTP_OPEN_NACK)) {
         ttpoe_parse_print (skb, TTP_TX, 3);
         dev_queue_xmit (skb);
+        return;
     }
-    else {
-        ttp_skb_drop (skb);
-    }
+
+    ttp_skb_drop (skb);
 }
 
 
@@ -621,58 +606,49 @@ static int ttp_skb_recv (struct sk_buff *skb)
     }
     if (ttp_rnd_flip (ttp_drop_pct)) {
         TTP_DBG ("%s: ->! Rx frame dropped: rate:%d%%\n", __FUNCTION__, ttp_drop_pct);
-        ttp_skb_drop (skb);
-        return 0;
-    }
-    memset (&frh, 0, sizeof (frh));
-    ttp_skb_pars (skb, &frh, NULL);
-    if (ttpoe_parse_check (skb)) {
-        ttp_skb_drop (skb);
-        return 0;
-    }
-    if (ttp_ipv4_encap) {
-        if (!ttp_ipv4_prefix) {
-            TTP_DBG ("%s: ->> Rx pkt dropped: ipv4 'prefix' not set\n", __FUNCTION__);
-            ttp_skb_drop (skb);
-            return 0;
-        }
-        if (frh.ip4->daddr != ttp_debug_source.ipa) {
-            TTP_DBG ("%s: ->> Rx pkt dropped: ip addr != my addr\n", __FUNCTION__);
-            ttp_skb_drop (skb);
-            return 0;
-        }
-        if (frh.udp->source != TTP_IPUDP_SRCPORT || frh.udp->dest != TTP_IPUDP_DSTPORT) {
-            TTP_DBG ("%s: ->> Rx pkt dropped: wrong udp port\n", __FUNCTION__);
-            ttp_skb_drop (skb);
-            return 0;
-        }
-        TTP_DB2 ("%s: ->> Rx pkt: len:%d dev:%s\n", __FUNCTION__,
-                 skb->len, skb->dev->name);
-        ttpoe_parse_print (skb, TTP_RX, 2);
-        if (skb->protocol != htons (ETH_P_IP)) {
-            TTP_DBG ("%s: UNEXPECTED ether-type: 0x%04x\n", __FUNCTION__,
-                     ntohs (skb->protocol));
-            ttp_skb_drop (skb);
-            return 0;
-        }
-        goto recv;
+        goto drop;
     }
 
+    memset (&frh, 0, sizeof (frh));
+    ttp_skb_pars (skb, &frh, NULL);
+
+    if (ttp_ipv4_encap) {
+        if (!ttp_ipv4_prefix) {
+            TTP_DB2 ("%s: ->> Rx pkt dropped: IPv4 'prefix' not set\n", __FUNCTION__);
+            goto drop;
+        }
+        if (skb->protocol != htons (ETH_P_IP)) {
+            goto drop;
+        }
+        if (frh.ip4->daddr != ttp_debug_source.ipa) {
+            goto drop;
+        }
+        if (frh.ip4->ihl != TTP_IPHDR_IHL) {
+            goto drop;
+        }
+        if (frh.ip4->protocol != IPPROTO_UDP) {
+            goto drop;
+        }
+        if (frh.udp->source != htons (TTP_IPUDP_SRCPORT)) {
+            goto drop;
+        }
+        if (frh.udp->dest != htons (TTP_IPUDP_DSTPORT)) {
+            goto drop;
+        }
+        TTP_DB2 ("%s: ->> Rx pkt: len:%d dev:%s\n", __FUNCTION__, skb->len,
+                 skb->dev->name);
+        ttpoe_parse_print (skb, TTP_RX, 2);
+        goto recv;
+    }
     if (!ether_addr_equal (frh.eth->h_dest, ttp_etype_dev.dev->dev_addr)) {
         if (skb->protocol != htons (TESLA_ETH_P_TTPOE)) {
-            TTP_DBG ("%s: UNEXPECTED ether-type: 0x%04x\n", __FUNCTION__,
-                     ntohs (skb->protocol));
-            ttp_skb_drop (skb);
-            return 0;
+            goto drop;
         }
         if (!is_multicast_ether_addr (frh.eth->h_dest)) {
-            TTP_DBG ("%s: UNEXPECTED ether-dest: %*phC\n", __FUNCTION__,
-                     ETH_ALEN, frh.eth->h_dest);
-            ttp_skb_drop (skb);
-            return 0;
+            TTP_DB2 ("%s: ->> Rx frame dropped: MAC addr not mcast\n", __FUNCTION__);
+            goto drop;
         }
-        TTP_DB2 ("%s: ->> Rx (gw-ctrl) frame: len:%d dev:%s\n", __FUNCTION__,
-                  skb->len, skb->dev->name);
+        TTP_DB2 ("%s: ->> Rx (gw-ctrl) frame: dev:%s\n", __FUNCTION__, skb->dev->name);
         ttpoe_parse_print (skb, TTP_RX, 2);
         if (!ether_addr_equal (ttp_nhmac, frh.eth->h_source)) {
             TTP_DB2 ("`->: Learnt nhmac:%*phC\n", ETH_ALEN, frh.eth->h_source);
@@ -686,15 +662,21 @@ static int ttp_skb_recv (struct sk_buff *skb)
     }
 
 recv:
-    TTP_DBG ("%s: ->> Rx frame: len:%d dev:%s\n", __FUNCTION__, skb->len, skb->dev->name);
+    if (ttpoe_parse_check (skb)) {
+        goto drop;
+    }
 
+    TTP_DBG ("%s: ->> Rx frame: len:%d dev:%s\n", __FUNCTION__, skb->len, skb->dev->name);
     TTP_RUN_SPIN_LOCKED ({
         skb_queue_tail (&ttp_global_root_head.skb_head, skb);
         atomic_inc (&ttp_stats.skb_rx);
     });
 
     schedule_work (&ttp_global_root_head.work_queue);
+    return 0;
 
+drop:
+    ttp_skb_drop (skb);
     return 0;
 }
 
@@ -705,20 +687,21 @@ static int ttpoe_skb_recv_func (struct sk_buff *skb, struct net_device *dev,
 {
     if (ttp_shutdown) {
         TTP_DBG ("%s: ->> Rx frame dropped: ttp is shutdown\n", __FUNCTION__);
-        ttp_skb_drop (skb);
-        return 0;
+        goto drop;
     }
-
     if (skb_headroom (skb) < TTP_IP_HEADROOM) {
         if (pskb_expand_head (skb, TTP_IP_HEADROOM, 0, GFP_ATOMIC)) {
             TTP_DBG ("%s:    Drop frame: insufficient headroom\n", __FUNCTION__);
-            ttp_skb_drop (skb);
-            return 0;
+            goto drop;
         }
     }
 
     skb_push (skb, ETH_HLEN);
     return ttp_skb_recv (skb);
+
+drop:
+    ttp_skb_drop (skb);
+    return 0;
 }
 
 TTP_NOINLINE
