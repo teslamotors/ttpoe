@@ -154,7 +154,7 @@ extern char *ttp_dev;
 struct ttp_tsla_type_hdr {
     struct {
 #if defined (__LITTLE_ENDIAN_BITFIELD)
-        u8 tthl : 4;            /* similar to ip.ihl */
+        u8 tthl : 4;            /* similar to ip.ihl: lsb first */
         u8 vers : 2;
         u8 styp : 2;
 #elif defined (__BIG_ENDIAN_BITFIELD)
@@ -369,6 +369,7 @@ static inline u8 *ttp_prepare_ipv4 (u8 *pkt, int len, u32 sa4, u32 da4, bool gw)
     ipv4->ihl      = TTP_IPHDR_IHL;
     ipv4->ttl      = TTP_IPHDR_TTL;
     ipv4->protocol = gw ? TTP_IPPROTO_TTP : IPPROTO_UDP;
+    ipv4->frag_off = htons(IP_DF); /* don't fragment */
     ipv4->saddr    = sa4;
     ipv4->daddr    = da4;
     ipv4->tot_len  = htons (frame_len - ETH_HLEN);
@@ -425,7 +426,7 @@ static inline void ttp_print_shim_hdr (const struct ttp_tsla_shim_hdr *tsh)
 static inline void ttp_print_udp_hdr (const struct udphdr *udp)
 {
     TTP_DBG (" udp: src-port:%d dst-port:%d cksum:0x%04x length:%d%s\n",
-             udp->source, udp->dest, ntohs (udp->check), ntohs (udp->len),
-             ntohs (udp->len) == 2 ? " (ctrl)" : "");
+             ntohs (udp->source), ntohs (udp->dest), ntohs (udp->check),
+             ntohs (udp->len), ntohs (udp->len) == 2 ? " (ctrl)" : "");
 }
 #endif

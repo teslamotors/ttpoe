@@ -65,6 +65,7 @@
 #include <linux/timer.h>
 #include <linux/crc16.h>
 #include <net/addrconf.h>
+#include <net/ip.h>
 
 #include <ttp.h>
 
@@ -209,7 +210,7 @@ void ttp_tag_reset (struct ttp_link_tag *lt)
 }
 
 
-/* add 'tag' to table: return 0 (hash val in kid); 1 if both bkts are full*/
+/* add 'tag' to table: return 0 (hash val in kid); 1 if all bkts are full */
 int ttp_tag_add (u64 kid)
 {
     u8  vc, gw, hv, t3;
@@ -238,8 +239,8 @@ int ttp_tag_add (u64 kid)
         BUG_ON (1);
     }
 
-    /* try bkt-0 first then bkt-1 */
-    for (bk = 0; bk < 2; bk++) {
+    /* try bkt-0, then bkt-1, ... */
+    for (bk = 0; bk < TTP_TAG_TBL_BKTS_NUM; bk++) {
         if (!lt->valid) { /* found an empty slot */
             lt->valid = 1;
             lt->state = TTP_ST__CLOSED;
@@ -266,7 +267,7 @@ int ttp_tag_add (u64 kid)
     atomic_inc (&ttp_stats.coll[hv]);
     atomic_inc (&ttp_stats.colls);
 
-    return 1; /* both 'ways' (bkts) full; victimize (TODO) */
+    return 1; /* all 'ways' (bkts) full; victimize (TODO) */
 }
 
 

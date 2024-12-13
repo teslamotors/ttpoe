@@ -54,6 +54,7 @@
 #include <linux/module.h>
 #include <linux/seq_file.h>
 #include <net/addrconf.h>
+#include <net/ip.h>
 
 #include <ttp.h>
 
@@ -416,19 +417,33 @@ void ttpoe_parse_print (const struct sk_buff *skb, enum ttp_frame_direction dir,
         return;
     }
 
-    TTP_VBG ("Conn: opcode: %1d [ %s ]\n",
-             frh.ttp->conn_opcode, TTP_OPCODE_NAME (frh.ttp->conn_opcode));
+    TTP_VBG ("Conn:   vers: %1d res-op: %1d     opcode: %1d [ %s ]\n",
+             frh.ttp->conn_version, frh.ttp->res_opcode, frh.ttp->conn_opcode,
+             TTP_OPCODE_NAME (frh.ttp->conn_opcode));
 
-    TTP_VBG ("Conn:     vc: %-2d  tx: %-2d  rx: %-2d     epoch: %-2d\n",
-             frh.ttp->conn_vc, frh.ttp->conn_tx, frh.ttp->conn_rx,
-             ntohs (frh.ttp->conn_epoch));
+    if (frh.ttp->conn_version) {
+        TTP_VBG ("Conn:  vc-id: %1d   res0: %*phC  epoch: %-2d\n",
+                 frh.ttp->conn_vc,
+                 (int)sizeof (frh.ttp->conn_reserved0), &frh.ttp->conn_reserved0,
+                 ntohs (frh.ttp->conn_epoch));
 
-    TTP_VBG ("Conn:  congn: %-2d    reserved: %*phC   extn: %-2d\n",
-             frh.ttp->conn_congestion,
-             (int)sizeof (frh.ttp->conn_reserved1), &frh.ttp->conn_reserved1,
-             frh.ttp->conn_extension);
+        TTP_VBG ("Conn:  congn: %-2d r1/r2: %1x/%1x    cr/ce: %d/%d  extn: %-2d\n",
+                 frh.ttp->conn_congestion, frh.ttp->conn_res1, frh.ttp->conn_res2,
+                 frh.ttp->conn_congn_reduced, frh.ttp->conn_congn_reduced_echo,
+                 frh.ttp->conn_extension);
+    }
+    else {                      /* backward-compat: version-0 = layer-2 */
+        TTP_VBG ("Conn:  vc-id: %1d  tx/rx: %d/%d    epoch: %-2d\n",
+                 frh.ttp->conn_vc, frh.ttp->conn_tx, frh.ttp->conn_rx,
+                 ntohs (frh.ttp->conn_epoch));
 
-    TTP_VBG ("Conn: tx_seq: %-7u rx_seq: %-7u\n",
+        TTP_VBG ("Conn:  congn: %-2d  res1: %*phC   extn: %-2d\n",
+                 frh.ttp->conn_congestion,
+                 (int)sizeof (frh.ttp->conn_reserved1), &frh.ttp->conn_reserved1,
+                 frh.ttp->conn_extension);
+    }
+
+    TTP_VBG ("Conn: tx_seq: %-7u         rx_seq: %-7u\n",
              ntohl (frh.ttp->conn_tx_seq), ntohl (frh.ttp->conn_rx_seq));
 
     if (pif.noc_len) {

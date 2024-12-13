@@ -65,6 +65,7 @@
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <net/addrconf.h>
+#include <net/ip.h>
 
 #include <ttp.h>
 

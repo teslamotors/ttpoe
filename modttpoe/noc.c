@@ -69,6 +69,7 @@
 #include <linux/debugfs.h>
 #include <linux/proc_fs.h>
 #include <net/addrconf.h>
+#include <net/ip.h>
 
 #include <ttp.h>
 
@@ -206,7 +207,7 @@ int ttpoe_noc_debug_tx (u8 *buf, struct sk_buff *skb, int nl,
             return -ENOKEY;     /* error: no tag key */
         }
         if (1 == rv) {
-            return -ENFILE;     /* both buckets full, no way */
+            return -ENFILE;     /* all buckets full, no way */
         }
 
         /* tag allocate success: get 'lt' again */

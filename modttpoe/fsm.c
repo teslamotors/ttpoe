@@ -66,6 +66,7 @@
 #include <linux/timer.h>
 #include <linux/crc16.h>
 #include <net/addrconf.h>
+#include <net/ip.h>
 
 #include <ttp.h>
 

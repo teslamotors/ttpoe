@@ -76,6 +76,7 @@
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <net/addrconf.h>
+#include <net/ip.h>
 
 #include <ttp.h>
 
@@ -476,6 +477,7 @@ static bool ttp_skb_net_setup (struct sk_buff *skb, struct ttp_link_tag *lt, u16
     frh.ttp->conn_vc = lt ? lt->vci : TTP_MAX_VCID;
 
     if (t3) { /* ip4 encap */
+        frh.ttp->conn_version = 2;
         if (!ttp_debug_source.ipa) {
             TTP_DBG ("%s: Drop tx-frame dropped: ipv4 'src-ip' not set\n", __FUNCTION__);
             return false;

@@ -64,15 +64,15 @@ enum ttp_frame_direction {
  *
  *  15  14  13  12  11  10   9   8   7   6   5   4   3   2   1   0
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
- * |         opcode [7:0]          |             vc [7:0]          |
+ * | resop |     opcode [5:0]      |             vc [7:0]          |
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
  * |             tx [7:0]          |             rx [7:0]          |
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
  * |                          epoch [15:0]                         |
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
- * |         congestion [7:0]      |      reserved-byte [7:0]      |
+ * |         congestion [7:0]      | version [3:0] |  res1 [3:0]   |
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
- * |      reserved-byte [7:0]      |          extension [7:0]      |
+ * |      res2 [5:0]       | cr| ce|          extension [7:0]      |
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
  * |                       tx-sequence [31:0]                      |
  * |                                                               |
@@ -82,17 +82,55 @@ enum ttp_frame_direction {
  * +---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
  */
 struct ttp_transport_hdr {
-    u8  conn_opcode;
+#if defined (__LITTLE_ENDIAN_BITFIELD)
+    u8  conn_opcode : 6;        /* lsb first */
+    u8  res_opcode  : 2;
+#elif defined (__BIG_ENDIAN_BITFIELD)
+    u8  res_opcode  : 2;
+    u8  conn_opcode : 6;
+#elif defined (__KERNEL__)
+# error "Neither Little-endian nor Big-endian"
+#else
+    u8  res_opcode  : 2;
+    u8  conn_opcode : 6;
+#endif
     u8  conn_vc;
-
-    u8  conn_tx;
-    u8  conn_rx;
+    union {
+        struct {                /* FSM-v1 */
+            u8  conn_tx;
+            u8  conn_rx;
+        };
+        u16 conn_reserved0;     /* FSM-v3 */
+    };
     u16 conn_epoch;
-
-    u8  conn_congestion;
-    u16 conn_reserved1;
+    u8  conn_congestion;        /* a.k.a. 'correction' in FSM-v3 */
+    union {
+        u16 conn_reserved1;     /* FSM-v1 */
+        struct {                /* FSM-v3 */
+#if defined (__LITTLE_ENDIAN_BITFIELD)
+            u16 conn_congn_reduced_echo : 1; /* lsb first */
+            u16 conn_congn_reduced      : 1;
+            u16 conn_res1               : 6;
+            u16 conn_res2               : 4;
+            u16 conn_version            : 4;
+#elif defined (__BIG_ENDIAN_BITFIELD)
+            u16 conn_version            : 4;
+            u16 conn_res1               : 4;
+            u16 conn_res2               : 6;
+            u16 conn_congn_reduced      : 1;
+            u16 conn_congn_reduced_echo : 1;
+#elif defined (__KERNEL__)
+# error "Neither Little-endian nor Big-endian"
+#else
+            u16 conn_congn_reduced_echo : 1; /* lsb first */
+            u16 conn_congn_reduced      : 1;
+            u16 conn_res1               : 6;
+            u16 conn_res2               : 4;
+            u16 conn_version            : 4;
+#endif
+        };
+    };
     u8  conn_extension;
-
     u32 conn_tx_seq;
     u32 conn_rx_seq;
 } __attribute__((packed));
