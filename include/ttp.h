@@ -59,8 +59,8 @@
 #define TTP_IPHDR_TTL        9  /* arbitrary value - needs to be non-zero at a minimum */
 #define TTP_IPPROTO_TTP    146  /* used only in ttp-gw mode; ipv4 mode uses UDP */
 
-#define TTP_IPUDP_SRCPORT  111  /* arbitrary for now */
-#define TTP_IPUDP_DSTPORT  222  /* arbitrary for now */
+#define TTP_IPUDP_SRCPORT  420  /* arbitrary for now */
+#define TTP_IPUDP_DSTPORT  420  /* arbitrary for now */
 
 #define TTP_NOTRACE   notrace
 #define TTP_NOINLINE  noinline
